@@ -1507,10 +1507,7 @@
       const curRps = (State.isRunning && !isReqZero) ? Math.round(State.clientReqRate * State.simSpeed) : 0;
       document.getElementById('metric-rps').innerText = curRps;
 
-      let totalInflight = 0;
-      Object.values(State.nodes).forEach(n => {
-        totalInflight += n.activeConnections;
-      });
+      let totalInflight = packets.length;
       document.getElementById('metric-inflight').innerText = totalInflight;
 
       const dot = document.getElementById('traffic-dot');
@@ -1574,8 +1571,8 @@
       document.getElementById('db-conn').innerText = `${dbConn} conn`;
 
       let clientConns = 0;
-      Object.values(State.nodes).forEach(n => {
-        if (n.id.startsWith('web_')) clientConns += n.activeConnections;
+      State.clients.slice(0, State.clientCount).forEach(c => {
+        clientConns += (c.activeConns || 0);
       });
       const clientTotalEl = document.getElementById('client-total-active');
       if (clientTotalEl) clientTotalEl.innerText = clientConns;
@@ -1870,7 +1867,6 @@
 
       // SORRY Server 稼働時 (行き: 青 / 帰り: 緑)
       if (State.nodes.web_sorry.lbStatus === 'up/active') {
-        State.nodes.web_sorry.activeConnections++;
         packets.push({
           forwardHops: [clientCardId, 'node-ext_lb', 'card-web_sorry'],
           returnHops: ['card-web_sorry', 'node-ext_lb', clientCardId],
@@ -2127,11 +2123,13 @@
           continue;
         }
 
-        if (p.webNode && connCounts[p.webNode.id] !== undefined) {
-          connCounts[p.webNode.id]++;
-        }
-        if (p.apNode && connCounts[p.apNode.id] !== undefined) {
-          connCounts[p.apNode.id]++;
+        // 各ノード（Web / AP / SORRY）にパケットが実際に到着し、滞留・処理中である期間のみ Conn をカウント
+        // （クライアント〜LB間やノード間を飛行中、あるいは次ホップ送出後はカウントしない）
+        if (p.stayNodeId && p.stayNodeId.startsWith('card-')) {
+          const targetNodeId = p.stayNodeId.replace('card-', '');
+          if (connCounts[targetNodeId] !== undefined) {
+            connCounts[targetNodeId]++;
+          }
         }
 
         if (p.stayTimer > 0) {
