@@ -389,14 +389,6 @@
         <span id="label-req-rate" style="color: #38bdf8; font-weight: bold; min-width: 44px;">5 r/s (計20)</span>
       </div>
 
-      <!-- Traffic Mode (Auto / Manual) -->
-      <div style="display: flex; align-items: center; gap: 6px; background: rgba(15,23,42,0.8); padding: 3px 8px; border-radius: 6px; border: 1px solid #1e293b;">
-        <span style="color: #94a3b8;">モード:</span>
-        <button id="btn-traffic-mode-subnav" onclick="toggleTrafficMode()" class="btn btn-sky" style="padding: 2px 8px; font-size: 10px; font-weight: bold; font-family: monospace;" title="クリックして手動モード/自動生成モードを切り替え">
-          🔄 自動生成
-        </button>
-      </div>
-
       <!-- Server Stay Latency Adjusters -->
       <div style="display: flex; align-items: center; gap: 10px; background: rgba(15,23,42,0.8); padding: 3px 10px; border-radius: 6px; border: 1px solid #1e293b;">
         <span style="color: #f59e0b; font-weight: bold;">⏱️ サーバ処理滞留時間:</span>
@@ -486,10 +478,7 @@
               </span>
               <span id="client-total-active" style="color: #34d399; font-weight: bold;">0 conn</span>
             </div>
-            <div class="stage-body" style="align-items: center; justify-content: flex-start;">
-              <button id="btn-traffic-mode-client" onclick="toggleTrafficMode()" class="btn btn-sky" style="width: 100%; max-width: 140px; margin-bottom: 5px; font-size: 9.5px; padding: 3px 6px; font-weight: bold; font-family: monospace;" title="クリックして手動モード/自動生成モード切替">
-                🔄 自動 (切替 🖱️)
-              </button>
+            <div class="stage-body" style="align-items: center; justify-content: center;">
               <div id="client-click-hint" style="display: none; font-size: 8px; color: #f59e0b; text-align: center; margin-bottom: 3px; font-family: monospace; animation: pulse-amber 1.5s infinite; font-weight: bold;">
                 👇 カードをクリックで1リクエスト送信
               </div>
@@ -1376,8 +1365,6 @@
 
     function updateTrafficModeUI() {
       const btn = document.getElementById('btn-traffic-mode');
-      const btnSubnav = document.getElementById('btn-traffic-mode-subnav');
-      const btnClient = document.getElementById('btn-traffic-mode-client');
       const badge = document.getElementById('client-mode-badge');
       const hint = document.getElementById('client-click-hint');
       const sliderReq = document.getElementById('slider-req');
@@ -1385,17 +1372,10 @@
 
       const isManual = State.trafficMode === 'manual';
 
-      [btn, btnSubnav].forEach(b => {
-        if (!b) return;
-        b.className = isManual ? 'btn btn-amber' : 'btn btn-sky';
-        b.innerHTML = isManual ? '🖱️ 手動(クリック送出)' : '🔄 自動生成';
-        b.title = isManual ? 'クリックして自動生成モードに切り替え' : 'クリックして手動モードに切り替え';
-      });
-
-      if (btnClient) {
-        btnClient.className = isManual ? 'btn btn-amber' : 'btn btn-sky';
-        btnClient.innerHTML = isManual ? '🖱️ 手動モード中 (切替 🔄)' : '🔄 自動モード (切替 🖱️)';
-        btnClient.title = isManual ? 'クリックして自動生成モードに切り替え' : 'クリックして手動モードに切り替え';
+      if (btn) {
+        btn.className = isManual ? 'btn btn-amber' : 'btn btn-sky';
+        btn.innerHTML = isManual ? '🖱️ 手動(クリック送出)' : '🔄 自動生成';
+        btn.title = isManual ? 'クリックして自動生成モードに切り替え' : 'クリックして手動モードに切り替え';
       }
 
       if (badge) badge.style.display = isManual ? 'inline-block' : 'none';
