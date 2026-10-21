@@ -289,9 +289,25 @@ async def run_tests():
 
         # 8. Test Manual Mode & Single Request on Client Click
         print("\n--- Testing Manual Mode & Single Request Trigger on Client Click ---")
+        # In Auto mode, Req badge should NOT be present on client cards
+        auto_has_req = await page.evaluate("""() => {
+            const html = document.getElementById('clients-list-container').innerHTML;
+            return html.includes('⚡Req');
+        }""")
+        print(f"  Req badge in Auto mode: {auto_has_req}")
+        assert not auto_has_req, "Req badge must NOT be shown in Auto mode"
+
         btn_mode = await page.wait_for_selector("#btn-traffic-mode", timeout=3000)
         await btn_mode.click()
         await page.wait_for_timeout(300)
+
+        # In Manual mode, Req badge SHOULD be present on client cards
+        manual_has_req = await page.evaluate("""() => {
+            const html = document.getElementById('clients-list-container').innerHTML;
+            return html.includes('⚡Req');
+        }""")
+        print(f"  Req badge in Manual mode: {manual_has_req}")
+        assert manual_has_req, "Req badge MUST be shown in Manual mode"
 
         mode_text = await btn_mode.inner_text()
         print(f"  Traffic Mode after toggle: {mode_text}")
@@ -354,6 +370,8 @@ async def run_tests():
         auto_count = await page.evaluate("() => packets.length")
         print(f"  Switched back to auto mode. Auto traffic resumed: packets count = {auto_count}")
         assert auto_count > 0, "Traffic auto-generation must resume in auto mode"
+        auto_has_req_after = await page.evaluate("() => document.getElementById('clients-list-container').innerHTML.includes('⚡Req')")
+        assert not auto_has_req_after, "Req badge must disappear when switched back to Auto mode"
 
         if errors:
             print("\n[ERROR] Errors encountered:")

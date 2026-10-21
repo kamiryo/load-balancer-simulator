@@ -916,6 +916,7 @@
       const container = document.getElementById('clients-list-container');
       if (!container) return;
 
+      const isManual = State.trafficMode === 'manual';
       const activeClients = State.clients.slice(0, State.clientCount);
       container.innerHTML = activeClients.map(c => {
         const hasSess = c.sessionId !== null;
@@ -934,15 +935,24 @@
         const titleColor = hasSess ? (c.system === 'A' ? '#38bdf8' : '#c084fc') : (c.wasError ? '#fca5a5' : '#cbd5e1');
         const dotColor = hasSess ? '#34d399' : (c.wasError ? '#ef4444' : '#94a3b8');
 
+        // 手動モード時のみ手動リクエストボタン (⚡Req) を表示＆クリック可能に
+        const reqBadge = isManual 
+          ? `<span style="font-size: 7px; color: #f59e0b; background: rgba(245,158,11,0.2); border: 1px solid rgba(245,158,11,0.4); padding: 0px 3px; border-radius: 2px; font-weight: bold; animation: pulse-amber 1.5s infinite;">⚡Req</span>` 
+          : '';
+        const cardClass = isManual ? 'node-card client-card-item' : 'node-card';
+        const clickAttr = isManual ? `onclick="sendManualClientRequest(${c.id})"` : '';
+        const titleAttr = isManual ? `title="クリックして1リクエスト送信 (${c.name})"` : '';
+        const cursorStyle = isManual ? 'cursor: pointer;' : '';
+
         return `
-          <div id="card-client-${c.id}" class="node-card client-card-item" onclick="sendManualClientRequest(${c.id})" title="クリックして1リクエスト送信 (${c.name})" style="padding: 3px 6px; border-color: ${borderColor}; background: rgba(15, 23, 42, 0.9); min-height: 38px; display: flex; flex-direction: column; justify-content: center; box-shadow: 0 2px 8px rgba(0,0,0,0.4);">
+          <div id="card-client-${c.id}" class="${cardClass}" ${clickAttr} ${titleAttr} style="padding: 3px 6px; border-color: ${borderColor}; background: rgba(15, 23, 42, 0.9); min-height: 38px; display: flex; flex-direction: column; justify-content: center; box-shadow: 0 2px 8px rgba(0,0,0,0.4); ${cursorStyle}">
             <div style="display: flex; justify-content: space-between; align-items: center; line-height: 1.1;">
               <span style="font-weight: bold; font-family: monospace; color: ${titleColor}; font-size: 9px; display: flex; align-items: center; gap: 3px;">
                 <span style="display: inline-block; width: 5px; height: 5px; border-radius: 50%; background: ${dotColor};"></span>
                 ${c.name}
               </span>
               <span style="display: flex; align-items: center; gap: 3px;">
-                <span style="font-size: 7px; color: #38bdf8; background: rgba(56,189,248,0.15); border: 1px solid rgba(56,189,248,0.35); padding: 0px 3px; border-radius: 2px; font-weight: bold;">⚡Req</span>
+                ${reqBadge}
                 <span style="font-size: 7.5px; color: #64748b; font-family: monospace;">${c.ip}</span>
               </span>
             </div>
@@ -1442,6 +1452,9 @@
           labelReq.innerText = `${State.reqPerClient} r/s (計${total})`;
         }
       }
+
+      // クライアントカードの⚡Reqバッジ表示/非表示を更新
+      renderClientCards();
     }
 
     // Manual Client Request Trigger (Click on Client Card)
