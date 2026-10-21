@@ -1168,7 +1168,7 @@
 
         if (hasWait) {
           node.drainTimer = waitSec;
-          addLog('WARN', `${node.name}: 切離(waitあり)投入。新規通信を拒否し、${waitSec}秒間既存通信の完了を維持します。`, '#f59e0b');
+          addLog('WARN', `${node.name}: [EXTERNAL LB] 切離(waitあり)投入。新規通信を停止し、${waitSec}秒間既存通信の完了を維持します。`, '#f59e0b');
 
           if (activeDrainTimers[id]) clearInterval(activeDrainTimers[id]);
           activeDrainTimers[id] = setInterval(() => {
@@ -1185,25 +1185,10 @@
         } else {
           if (activeDrainTimers[id]) clearInterval(activeDrainTimers[id]);
           node.drainTimer = 0;
-          const aborted = node.activeConnections;
-          node.activeConnections = 0;
-          State.stats.errorCount += aborted;
-
-          for (let i = 0; i < packets.length; i++) {
-            if (packets[i].webNode && packets[i].webNode.id === id) {
-              packets[i].isError = true;
-              packets[i].errorCode = 504;
-              packets[i].isReturning = true;
-              packets[i].stayTimer = 0;
-              packets[i].currentHop = 0;
-              if (packets[i].clientRef) {
-                const clientCardId = 'card-client-' + packets[i].clientRef.id;
-                packets[i].returnHops = ['card-' + id, 'node-ext_lb', clientCardId];
-              }
-            }
-          }
-          State.sessionTable = State.sessionTable.filter(s => s.targetWeb !== node.name);
-          addLog('ERROR', `${node.name}: 切離(waitなし)投入！既存の通信を即座に一切拒否 (${aborted} conn強制切断・504/RST)。`, '#ef4444');
+          // ★EXTERNAL LBでの切離(waitなし):
+          // LBは新規リクエストの転送を即時停止するが、すでにEXTERNAL LBを通過して裏(Web/AP/DB)で処理中のインフライト通信は
+          // プロセスが死んだわけではないため、裏で通常通り処理されてレスポンス（200 OK）まで保証される！
+          addLog('WARN', `${node.name}: [EXTERNAL LB] 切離(waitなし)投入。新規リクエスト転送を即時停止。通過済みのインフライト処理はレスポンスまで完走保証します。`, '#f59e0b');
         }
       });
     }
@@ -1743,16 +1728,16 @@
             <div style="background: #080d1a; border: 1px solid #d97706; padding: 8px; border-radius: 5px;">
               <b style="color: #f59e0b; font-size: 11.5px;">【waitあり】ジョブの挙動 (Graceful Drain)</b>
               <p style="margin-top: 3px; font-size: 10.5px; color: #cbd5e1;">
-                ジョブ投入後、<strong>30秒間既存の通信は維持するが、新規通信については即座に受け付けません</strong>。<br>
-                Web/AP/DBでの処理時間（滞留秒数）を終えてレスポンスがクライアントに戻るまで安全に待機します。顧客エラー（5xx）ゼロでリリースするために必須の運用です。
+                ジョブ投入後、新規セッションの振り分けは停止しますが、<strong>30秒間既存セッション（JSESSIONID確立済み）の通信をそのまま維持</strong>します。<br>
+                滞留秒数を終えてレスポンスがクライアントに戻るまで安全に待機するため、顧客エラー（5xx）ゼロで計画停止するために必須の運用です。
               </p>
             </div>
 
             <div style="background: #080d1a; border: 1px solid #dc2626; padding: 8px; border-radius: 5px;">
-              <b style="color: #ef4444; font-size: 11.5px;">【waitなし】ジョブの挙動 (Force Drop / Instant Kill)</b>
+              <b style="color: #ef4444; font-size: 11.5px;">【waitなし】ジョブの挙動 (Immediate Cut)</b>
               <p style="margin-top: 3px; font-size: 10.5px; color: #cbd5e1;">
-                ジョブ投入後、<strong>既存のコネクションの通信も一切拒否します</strong>。<br>
-                サーバ内で滞留中・SQL実行中だったリクエストは強制中断され、TCP RST または HTTP 504 Gateway Timeout が発生します。緊急障害対応時以外は推奨されません。
+                ジョブ投入後、<strong>次回以降の新規リクエストの振り分けを即座に停止</strong>します（もう片系へ新規誘導、または全滅時エラー）。<br>
+                ただし、<strong>すでに負荷分散装置（External LB）を通過し、WebやAP/DBで処理中だったインフライト通信については、プロセス障害ではないためレスポンス（200 OK）まで保証</strong>されます。
               </p>
             </div>
 
