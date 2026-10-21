@@ -300,18 +300,23 @@ async def run_tests():
         is_manual = await page.evaluate("() => State.trafficMode === 'manual'")
         assert is_manual, "State.trafficMode must be 'manual'"
 
-        # Wait for any in-flight packets to finish so network is idle
-        print("  Waiting for in-flight packets to clear in manual mode...")
-        cleared = False
-        idle_packets = 999
-        for _ in range(30):
-            await page.wait_for_timeout(300)
-            idle_packets = await page.evaluate("() => packets.length")
-            if idle_packets == 0:
-                cleared = True
-                break
-        print(f"  Network idle confirmed. Idle packets count: {idle_packets}")
-        assert cleared, "No new packets should be auto-spawned in manual mode"
+        # Verify complete initialization on mode switch (requests, sessions, LB states, metrics)
+        init_check = await page.evaluate("""() => {
+            return {
+                packetCount: packets.length,
+                allNullSessions: State.clients.slice(0, State.clientCount).every(c => c.sessionId === null),
+                allUpActiveWeb: Object.values(State.nodes).filter(n => n.id.startsWith('web_') && n.id !== 'web_sorry').every(n => n.lbStatus === 'up/active'),
+                sorryStandby: State.nodes.web_sorry.lbStatus === 'up/standby',
+                reqCount: State.stats.totalRequests
+            };
+        }""")
+        print(f"  Initialization check on toggle to manual: {init_check}")
+        assert init_check['packetCount'] == 0, "Packets must be immediately cleared on toggle"
+        assert init_check['allNullSessions'], "Client sessions must be reset to null on toggle"
+        assert init_check['allUpActiveWeb'], "All Web servers must be reset to up/active on toggle"
+        assert init_check['sorryStandby'], "SORRY must be reset to up/standby on toggle"
+        assert init_check['reqCount'] == 0, "Request stats must be reset to 0 on toggle"
+        print("  Confirmed: Requests, sessions, and LB states completely initialized on toggle to manual!")
 
         # Click Client-01
         print("  Clicking Client-01...")

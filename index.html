@@ -1246,30 +1246,79 @@
       integrateSystemWeb('B');
     }
 
-    window.resetToNormal = function() {
+    // シミュレーション状態の完全初期化（パケット・セッション・負荷分散状態・メトリクス）
+    function resetAllSimulationState(targetMode = null, customLog = null, clearSessions = false) {
+      // 1. 進行中パケットの即時破棄＆キャンバス消去
+      packets.length = 0;
+      if (ctx && canvas) {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+      }
+
+      // 2. 進行中タイマーの完全停止
       Object.keys(activeDrainTimers).forEach(k => clearInterval(activeDrainTimers[k]));
       activeDrainTimers = {};
 
+      // 3. 全負荷分散ノード状態の初期化
       Object.values(State.nodes).forEach(node => {
         if (node.id === 'web_sorry') {
           node.lbStatus = 'up/standby';
+          node.cpu = 5;
         } else {
           node.lbStatus = 'up/active';
+          node.cpu = 20;
         }
         node.drainTimer = 0;
         node.activeConnections = 0;
         if (node.version) node.version = 'v1.0.0';
       });
 
+      // 4. メトリクス・統計値のリセット
       State.stats = { totalRequests: 0, successCount: 0, errorCount: 0, sorryCount: 0, systemACount: 0, systemBCount: 0 };
-      State.trafficMode = 'auto';
+
+      // 5. モード設定とタイマー同期
+      if (targetMode) {
+        State.trafficMode = targetMode;
+      }
       updateTrafficModeUI();
       setupPacketSpawner();
-      initClients();
-      addLog('INFO', '通常稼働（デフォルト状態）へ復帰しました。全ノード up/active。', '#38bdf8');
+
+      // 6. クライアントセッションの初期化
+      if (clearSessions) {
+        // 手動/自動切替時: 全セッションをnull(新規接続)に完全クリア
+        State.clients.forEach(c => {
+          c.sessionId = null;
+          c.targetWeb = null;
+          c.targetAp = null;
+          c.system = null;
+          c.hasSession = false;
+          c.wasError = false;
+          c.activeConns = 0;
+        });
+        renderClientCards();
+        syncSessionTable();
+      } else {
+        // 通常稼働初期化時: デフォルトセッション構成に初期化
+        initClients();
+      }
+
+      // 7. ログ出力
+      if (customLog) {
+        addLog(customLog.level || 'INFO', customLog.message, customLog.color || '#38bdf8');
+      }
+
+      // 8. 全UI・コンポーネントの再描画
       checkSorryTrigger();
       renderAllCardsFull();
       renderRightPanel();
+      renderMetrics();
+    }
+
+    window.resetToNormal = function() {
+      resetAllSimulationState('auto', {
+        level: 'INFO',
+        message: '通常稼働（デフォルト状態）へ復帰しました。全ノード up/active、通信・セッション・負荷分散状態を初期化しました。',
+        color: '#38bdf8'
+      });
     };
 
     // Sliders
@@ -1353,14 +1402,18 @@
     // Traffic Mode (Auto / Manual)
     window.toggleTrafficMode = function() {
       if (State.trafficMode === 'auto') {
-        State.trafficMode = 'manual';
-        addLog('WARN', '🕹️ 【手動モード】に切り替えました。自動生成が停止しました。クライアントカードをクリックすると1リクエストずつ送信できます。', '#f59e0b');
+        resetAllSimulationState('manual', {
+          level: 'WARN',
+          message: '🕹️ 【手動モード】に切り替えました。パケット・セッション・負荷分散状態を初期化しました。クライアントカードをクリックして1リクエストずつ送信できます。',
+          color: '#f59e0b'
+        }, true);
       } else {
-        State.trafficMode = 'auto';
-        addLog('INFO', '🔄 【自動生成モード】に切り替えました。設定された流量で自動リクエスト送出を再開します。', '#38bdf8');
+        resetAllSimulationState('auto', {
+          level: 'INFO',
+          message: '🔄 【自動生成モード】に切り替えました。パケット・セッション・負荷分散状態を初期化し、自動リクエストを開始します。',
+          color: '#38bdf8'
+        }, true);
       }
-      updateTrafficModeUI();
-      setupPacketSpawner();
     };
 
     function updateTrafficModeUI() {
