@@ -1206,18 +1206,6 @@
           addLog('ERROR', `${node.name}: 切離(waitなし)投入！既存の通信を即座に一切拒否 (${aborted} conn強制切断・504/RST)。`, '#ef4444');
         }
       });
-
-      // その系にいたクライアントのセッションテーブルおよびセッション状態の即時クリア(waitなし)
-      if (!hasWait) {
-        State.clients.forEach(c => {
-          if (c.system === sys) {
-            c.sessionId = null;
-            c.hasSession = false;
-          }
-        });
-        renderClientCards();
-        syncSessionTable();
-      }
     }
 
     function integrateSystemWeb(sys) {
