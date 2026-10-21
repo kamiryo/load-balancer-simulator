@@ -978,13 +978,14 @@
 
     function checkSorryTrigger() {
       const webNodes = Object.values(State.nodes).filter(n => n.id.startsWith('web_') && n.system !== 'SORRY');
-      // SORRYはWEB全台が死んだdownになったときにのみup/activeになります
-      const allWebDown = (webNodes.length > 0) && webNodes.every(n => n.lbStatus === 'down/-');
+      // 稼働可能なWebノード (up/active または wait残存中のノード)
+      const hasActiveWeb = webNodes.some(n => n.lbStatus === 'up/active' || (n.lbStatus === 'up/under-maintenance(manual)' && n.drainTimer > 0));
 
-      if (allWebDown) {
+      // WEB全台が利用不能（全滅：down/- または 切離満了/waitなし切離）になった時にSORRYサーバをup/activeへ緊急自動昇格！
+      if (!hasActiveWeb && webNodes.length > 0) {
         if (State.nodes.web_sorry.lbStatus !== 'up/active') {
           State.nodes.web_sorry.lbStatus = 'up/active';
-          addLog('ALERT', '🚨 WEB全台が全て死んだ (down/-) ことを検知！External LBがSORRYサーバを緊急昇格 (up/active)。503 Sorry Pageを返却します。', '#f59e0b');
+          addLog('ALERT', '🚨 WEB全台の利用不能（切離・全滅）を検知！External LBがSORRYサーバを緊急自動昇格 (up/active)。503 Sorry Pageを返却します。', '#f59e0b');
           renderAllCardsFull();
         }
       } else {
@@ -1178,6 +1179,7 @@
               if (node.drainTimer === 0) {
                 clearInterval(activeDrainTimers[id]);
                 addLog('INFO', `${node.name}: ${waitSec}秒待機完了（Graceful Drain完了）。`, '#34d399');
+                checkSorryTrigger();
                 renderAllCardsFull();
               }
             }

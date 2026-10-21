@@ -215,6 +215,45 @@ async def run_tests():
             await page.wait_for_timeout(600)
         print("  All 3 'waitなし' in-flight response guarantee tests verified.")
 
+        # 6-C. Test Automatic SORRY Promotion on "WEB全台切離" Job (up/standby -> up/active -> up/standby)
+        print("\n--- Testing Automatic SORRY Promotion on 'WEB全台切離' Job ---")
+        # Ensure initially SORRY is up/standby
+        sorry_init = await page.locator("#lb-badge-web_sorry").inner_text()
+        print(f"  Initial SORRY status: {sorry_init}")
+        assert "up/standby" in sorry_init, "SORRY must initially be up/standby"
+
+        # Execute "WEB全台切離-waitなし"
+        btn_all_cut = await page.wait_for_selector('button:has-text("WEB全台切離-waitなし")', timeout=3000)
+        await btn_all_cut.click()
+        await page.wait_for_timeout(400)
+
+        # Verify SORRY automatically promoted to up/active
+        sorry_promoted = await page.locator("#lb-badge-web_sorry").inner_text()
+        print(f"  After 'WEB全台切離-waitなし' -> SORRY status: {sorry_promoted}")
+        assert "up/active" in sorry_promoted, "SORRY must be automatically promoted to up/active on all WEB cut!"
+
+        # Verify SORRY traffic: clients receive 503 Sorry Page from SORRY server
+        found_sorry_traffic = False
+        for _ in range(15):
+            await page.wait_for_timeout(200)
+            sorry_p_count = await page.evaluate("() => packets.filter(p => p.isSorry).length")
+            if sorry_p_count > 0:
+                found_sorry_traffic = True
+                print(f"  Confirmed: SORRY server receiving & responding to traffic! count={sorry_p_count}")
+                break
+        assert found_sorry_traffic, "SORRY server must handle traffic when promoted!"
+
+        # Recover WEB via "WEB全台組込"
+        btn_all_rec = await page.wait_for_selector('button:has-text("WEB全台組込")', timeout=3000)
+        await btn_all_rec.click()
+        await page.wait_for_timeout(400)
+
+        # Verify SORRY automatically returns to up/standby
+        sorry_recovered = await page.locator("#lb-badge-web_sorry").inner_text()
+        print(f"  After 'WEB全台組込' -> SORRY status: {sorry_recovered}")
+        assert "up/standby" in sorry_recovered, "SORRY must automatically return to up/standby when WEB recovered!"
+        print("  Confirmed: Automatic SORRY promotion and demotion on WEB全台切離/組込 verified successfully.")
+
         # 7. Test SORRY Server Response Flow (Request: Blue -> Response: Green)
         print("\n--- Testing SORRY Traffic Flow (Request -> Response Green Returning) ---")
         btn_sorry_fail = await page.wait_for_selector('button:has-text("WEB全台 down/-")', timeout=3000)
