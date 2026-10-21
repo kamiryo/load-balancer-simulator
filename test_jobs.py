@@ -186,6 +186,35 @@ async def run_tests():
             assert expected2 in val2, f"Expected {expected2} in {target2}, got {val2}"
         print("  All 9 operation jobs verified.")
 
+        # 6-B. Test In-flight Response Guarantee on 3 "waitなし" Cut Jobs:
+        # (WEB-A系切離-waitなし, WEB-B系切離-waitなし, WEB全台切離-waitなし)
+        # Even on immediate cut, in-flight packets that already passed External LB MUST complete and return green (200 OK)!
+        print("\n--- Testing In-flight Response Guarantee on 3 'waitなし' Cut Jobs ---")
+        nowait_scenarios = [
+            ("WEB-A系切離-waitなし", "A", "WEB-A系組込"),
+            ("WEB-B系切離-waitなし", "B", "WEB-B系組込"),
+            ("WEB全台切離-waitなし", "ALL", "WEB全台組込")
+        ]
+        for cut_job, target_sys, rec_job in nowait_scenarios:
+            btn_cut = await page.wait_for_selector(f'button:has-text("{cut_job}")', timeout=3000)
+            await btn_cut.click()
+            has_green = False
+            for _ in range(15):
+                await page.wait_for_timeout(200)
+                sys_filter = '(p.system === "A" || p.system === "B")' if target_sys == 'ALL' else f'p.system === "{target_sys}"'
+                ret_cnt = await page.evaluate(f"""() => {{
+                    return packets.filter(p => {sys_filter} && p.isReturning && !p.isError && p.errorCode === 200).length;
+                }}""")
+                if ret_cnt > 0:
+                    has_green = True
+                    print(f"  Confirmed [{cut_job}]: In-flight AP/DB packets completed and returned green (200 OK)! count={ret_cnt}")
+                    break
+            assert has_green, f"[{cut_job}] In-flight packets should complete normally and return green!"
+            btn_rec = await page.wait_for_selector(f'button:has-text("{rec_job}")', timeout=3000)
+            await btn_rec.click()
+            await page.wait_for_timeout(600)
+        print("  All 3 'waitなし' in-flight response guarantee tests verified.")
+
         # 7. Test SORRY Server Response Flow (Request: Blue -> Response: Green)
         print("\n--- Testing SORRY Traffic Flow (Request -> Response Green Returning) ---")
         btn_sorry_fail = await page.wait_for_selector('button:has-text("WEB全台 down/-")', timeout=3000)
