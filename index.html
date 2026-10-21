@@ -1,0 +1,2402 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>A系/B系 分離型Web・APクラスタ 負荷分散＆リリースシミュレータ</title>
+  <!-- 外部設定・定義ファイル (サーバ名、IP、負荷分散NW装置、ジョブ定義) -->
+  <script src="config.js"></script>
+  <style>
+    /* ==========================================================================
+       ゼロ依存（Pure CSS）: 外部CDN/外部スクリプト完全不使用・閉域網100%安全設計
+       ========================================================================== */
+    :root {
+      --bg-dark: #070b14;
+      --bg-header: #0b1120;
+      --bg-subnav: #0c1426;
+      --bg-card: #0f172a;
+      --border-dark: #1e293b;
+      --border-slate: #334155;
+      --sys-a: #38bdf8;
+      --sys-b: #c084fc;
+      --sorry-amber: #f59e0b;
+      --status-up: #10b981;
+      --status-maint: #f59e0b;
+      --status-down: #ef4444;
+      --status-standby: #64748b;
+      --text-main: #e2e8f0;
+      --text-sub: #94a3b8;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background-color: var(--bg-dark);
+      color: var(--text-main);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans JP", sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      user-select: none;
+      overflow-x: hidden;
+    }
+    code, .font-mono { font-family: "JetBrains Mono", Consolas, "Courier New", monospace; }
+
+    /* Custom scrollbars */
+    ::-webkit-scrollbar { width: 5px; height: 5px; }
+    ::-webkit-scrollbar-track { background: #080d1a; }
+    ::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #334155; }
+
+    /* Keyframe Animations */
+    @keyframes pulse-cyan {
+      0%, 100% { box-shadow: 0 0 10px rgba(56, 189, 248, 0.15); }
+      50% { box-shadow: 0 0 20px rgba(56, 189, 248, 0.4); }
+    }
+    @keyframes pulse-purple {
+      0%, 100% { box-shadow: 0 0 10px rgba(192, 132, 252, 0.15); }
+      50% { box-shadow: 0 0 20px rgba(192, 132, 252, 0.4); }
+    }
+    @keyframes pulse-amber {
+      0%, 100% { border-color: rgba(245, 158, 11, 0.4); box-shadow: 0 0 15px rgba(245, 158, 11, 0.2); }
+      50% { border-color: rgba(245, 158, 11, 1); box-shadow: 0 0 25px rgba(245, 158, 11, 0.6); }
+    }
+    @keyframes pulse-red {
+      0%, 100% { border-color: rgba(239, 68, 68, 0.4); box-shadow: 0 0 15px rgba(239, 68, 68, 0.3); }
+      50% { border-color: rgba(239, 68, 68, 1); box-shadow: 0 0 30px rgba(239, 68, 68, 0.85); }
+    }
+    @keyframes pulse-sorry {
+      0%, 100% { border-color: rgba(245, 158, 11, 0.6); box-shadow: 0 0 18px rgba(245, 158, 11, 0.4); }
+      50% { border-color: rgba(245, 158, 11, 1); box-shadow: 0 0 30px rgba(245, 158, 11, 0.85); }
+    }
+    @keyframes queue-glow {
+      0%, 100% { opacity: 0.6; }
+      50% { opacity: 1; }
+    }
+
+    .node-up-a { border: 1px solid rgba(56, 189, 248, 0.45); animation: pulse-cyan 3.5s infinite ease-in-out; }
+    .node-up-b { border: 1px solid rgba(192, 132, 252, 0.45); animation: pulse-purple 3.5s infinite ease-in-out; }
+    .node-maint { animation: pulse-amber 1.3s infinite ease-in-out !important; border: 1px solid #f59e0b !important; background: linear-gradient(135deg, rgba(245, 158, 11, 0.12), rgba(15, 23, 42, 0.95)) !important; }
+    .node-down { animation: pulse-red 0.8s infinite ease-in-out !important; border: 1px solid #ef4444 !important; background: rgba(239, 68, 68, 0.18) !important; }
+    .node-standby { opacity: 0.55; border: 1px solid #334155 !important; filter: grayscale(0.5); }
+    .node-sorry-active { border: 1px solid #f59e0b !important; animation: pulse-sorry 1.2s infinite ease-in-out !important; background: linear-gradient(135deg, rgba(245, 158, 11, 0.25), rgba(15, 23, 42, 0.95)) !important; }
+
+    .cyber-grid {
+      background-size: 28px 28px;
+      background-image: 
+        linear-gradient(to right, rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
+    }
+
+    /* Badges */
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      padding: 1px 5px;
+      border-radius: 4px;
+      font-size: 8.5px;
+      font-family: monospace;
+      font-weight: 600;
+      border: 1px solid transparent;
+    }
+    .badge-up { background: #064e3b; color: #34d399; border-color: #059669; }
+    .badge-maint { background: #78350f; color: #fcd34d; border-color: #d97706; }
+    .badge-down { background: #7f1d1d; color: #fca5a5; border-color: #dc2626; font-weight: bold; }
+    .badge-standby { background: #1e293b; color: #94a3b8; border-color: #475569; }
+
+    /* Buttons */
+    .btn {
+      cursor: pointer;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 4px 8px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 5px;
+      border: 1px solid transparent;
+      background: transparent;
+      color: inherit;
+      transition: all 0.15s ease;
+    }
+    .btn:disabled { opacity: 0.35; cursor: not-allowed; }
+    .btn-sky { background: #0284c7; color: #fff; border-color: #38bdf8; }
+    .btn-sky:hover:not(:disabled) { background: #0369a1; }
+    .btn-slate { background: #1e293b; color: #cbd5e1; border-color: #334155; }
+    .btn-slate:hover:not(:disabled) { background: #334155; }
+    .btn-amber { background: #d97706; color: #fff; border-color: #f59e0b; }
+    .btn-amber:hover:not(:disabled) { background: #b45309; }
+    .btn-rose { background: #dc2626; color: #fff; border-color: #ef4444; }
+    .btn-rose:hover:not(:disabled) { background: #b91c1c; }
+    .btn-emerald { background: #059669; color: #fff; border-color: #10b981; }
+    .btn-emerald:hover:not(:disabled) { background: #047857; }
+
+    /* Layout Containers */
+    .header-bar {
+      background: var(--bg-header);
+      border-bottom: 1px solid var(--border-dark);
+      padding: 10px 20px;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+    }
+    .subnav-bar {
+      background: var(--bg-subnav);
+      border-bottom: 1px solid var(--border-dark);
+      padding: 8px 20px;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .main-body {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      position: relative;
+    }
+    @media (min-width: 1280px) {
+      .main-body { flex-direction: row; }
+    }
+
+    .topo-grid {
+      display: grid;
+      grid-template-columns: repeat(6, 1fr);
+      gap: 12px;
+      height: 100%;
+      align-items: stretch;
+      position: relative;
+      z-index: 20;
+    }
+    /* Stage Column & Symmetric Tier Zones */
+    .stage-col {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      min-width: 0;
+    }
+    .stage-header {
+      font-size: 9px;
+      font-family: monospace;
+      color: #94a3b8;
+      text-transform: uppercase;
+      height: 15px;
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      letter-spacing: 0.3px;
+    }
+    .stage-body {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      min-height: 0;
+    }
+    .tier-zone-a, .tier-zone-b {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: stretch;
+    }
+    .tier-zone-center {
+      height: 64px;
+      min-height: 64px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .group-box {
+      padding: 4px;
+      border-radius: 6px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .group-box-a {
+      background: rgba(8, 47, 73, 0.22);
+      border: 1px solid rgba(3, 105, 161, 0.35);
+    }
+    .group-box-b {
+      background: rgba(59, 7, 100, 0.22);
+      border: 1px solid rgba(107, 33, 168, 0.35);
+    }
+    .group-title-a {
+      font-size: 8px;
+      font-family: monospace;
+      color: #38bdf8;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .group-title-b {
+      font-size: 8px;
+      font-family: monospace;
+      color: #c084fc;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .node-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-slate);
+      border-radius: 8px;
+      padding: 7px;
+      position: relative;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+      transition: border-color 0.25s ease, background-color 0.25s ease;
+    }
+    .job-btn {
+      width: 100%;
+      padding: 6px 8px;
+      border-radius: 5px;
+      font-size: 10.5px;
+      font-family: monospace;
+      font-weight: 600;
+      text-align: left;
+      cursor: pointer;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border: 1px solid transparent;
+      transition: all 0.15s ease;
+    }
+    .job-btn:hover { filter: brightness(1.18); transform: translateY(-1px); }
+    .job-btn:active { transform: translateY(0); }
+  </style>
+</head>
+<body>
+
+  <!-- Top Header Bar -->
+  <header class="header-bar">
+    <div style="display: flex; align-items: center; gap: 10px;">
+      <div style="width: 34px; height: 34px; border-radius: 8px; background: linear-gradient(135deg, #0284c7, #9333ea); display: flex; align-items: center; justify-content: center; box-shadow: 0 0 12px rgba(56, 189, 248, 0.3);">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2">
+          <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
+          <polyline points="2 17 12 22 22 17"></polyline>
+          <polyline points="2 12 12 17 22 12"></polyline>
+        </svg>
+      </div>
+      <div>
+        <h1 style="font-size: 15px; font-weight: bold; color: #fff; letter-spacing: 0.5px;">A系/B系 分離型Web・APクラスタ 負荷分散＆リリースシミュレータ</h1>
+      </div>
+    </div>
+
+    <!-- Real-time Metrics Dashboard -->
+    <div style="display: flex; align-items: center; gap: 14px; font-family: monospace; font-size: 11px; background: rgba(15, 23, 42, 0.95); padding: 5px 12px; border-radius: 8px; border: 1px solid #1e293b;">
+      <!-- Total Traffic -->
+      <div>
+        <div style="color: #64748b; font-size: 8.5px; text-transform: uppercase;">Traffic</div>
+        <div style="font-size: 12px; font-weight: bold; color: #fff; display: flex; align-items: center; gap: 5px;">
+          <span id="traffic-dot" style="display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #10b981;"></span>
+          <span id="metric-rps">20</span> <span style="font-size: 9px; color: #94a3b8;">r/s</span>
+        </div>
+      </div>
+
+      <!-- In-flight Requests total -->
+      <div style="border-left: 1px solid #1e293b; padding-left: 10px;">
+        <div style="color: #64748b; font-size: 8.5px; text-transform: uppercase;">滞留処理中 Req</div>
+        <div style="font-size: 12px; font-weight: bold; color: #38bdf8;">
+          <span id="metric-inflight">0</span> <span style="font-size: 9px; color: #94a3b8;">reqs</span>
+        </div>
+      </div>
+
+      <!-- SORRY Alert Status -->
+      <div style="border-left: 1px solid #1e293b; padding-left: 10px;">
+        <div style="color: #64748b; font-size: 8.5px; text-transform: uppercase;">SORRY</div>
+        <div id="metric-sorry-status" style="font-size: 10px; color: #94a3b8; font-weight: bold;">
+          STANDBY
+        </div>
+      </div>
+
+      <!-- Success vs Error -->
+      <div style="border-left: 1px solid #1e293b; padding-left: 10px;">
+        <div style="color: #64748b; font-size: 8.5px; text-transform: uppercase;">HTTP 200 / 5xx</div>
+        <div>
+          <span id="metric-success" style="color: #34d399; font-weight: bold;">0</span>
+          <span style="color: #475569;">/</span>
+          <span id="metric-error" style="color: #94a3b8;">0 err (0.0%)</span>
+        </div>
+      </div>
+
+      <!-- Traffic Ratio A vs B -->
+      <div style="border-left: 1px solid #1e293b; padding-left: 10px; width: 95px;">
+        <div style="display: flex; justify-content: space-between; font-size: 8.5px; margin-bottom: 2px;">
+          <span style="color: #38bdf8;">A: <b id="ratio-a">50</b>%</span>
+          <span style="color: #c084fc;">B: <b id="ratio-b">50</b>%</span>
+        </div>
+        <div style="width: 100%; height: 4px; background: #1e293b; border-radius: 2px; overflow: hidden; display: flex;">
+          <div id="bar-a" style="width: 50%; background: #38bdf8; transition: width 0.3s;"></div>
+          <div id="bar-b" style="width: 50%; background: #c084fc; transition: width 0.3s;"></div>
+        </div>
+      </div>
+
+      <!-- Simulation Controls -->
+      <div style="border-left: 1px solid #1e293b; padding-left: 10px; display: flex; gap: 5px;">
+        <button onclick="toggleRun()" id="btn-run" class="btn btn-amber" style="padding: 2px 7px; font-size: 10px;">一時停止</button>
+        <button onclick="resetToNormal()" title="通常稼働（デフォルト）にリセット" class="btn btn-slate" style="padding: 2px 6px; font-size: 10px;">通常稼働に戻す</button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Sub-Navbar: Latency & Traffic Controls -->
+  <div class="subnav-bar">
+    <!-- Traffic Sliders (Req Rate min=0, Server Stay Latencies) -->
+    <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 14px; font-family: monospace; font-size: 10.5px;">
+      
+      <!-- Client Count (1〜10) -->
+      <div style="display: flex; align-items: center; gap: 6px; background: rgba(15,23,42,0.8); padding: 3px 8px; border-radius: 6px; border: 1px solid #1e293b;">
+        <span style="color: #94a3b8;">クライアント数:</span>
+        <input type="range" id="slider-client-count" min="1" max="10" value="4" style="width: 65px; accent-color: #38bdf8; cursor: pointer;" oninput="onClientCountChange(this.value)">
+        <span id="label-client-count" style="color: #38bdf8; font-weight: bold; min-width: 28px;">4台</span>
+      </div>
+
+      <!-- 1 Client Req Rate (min 0) -->
+      <div style="display: flex; align-items: center; gap: 6px; background: rgba(15,23,42,0.8); padding: 3px 8px; border-radius: 6px; border: 1px solid #1e293b;">
+        <span style="color: #94a3b8;">1台あたりReq:</span>
+        <input type="range" id="slider-req" min="0" max="30" value="5" style="width: 70px; accent-color: #38bdf8; cursor: pointer;" oninput="onReqRateChange(this.value)">
+        <span id="label-req-rate" style="color: #38bdf8; font-weight: bold; min-width: 44px;">5 r/s (計20)</span>
+      </div>
+
+      <!-- Server Stay Latency Adjusters -->
+      <div style="display: flex; align-items: center; gap: 10px; background: rgba(15,23,42,0.8); padding: 3px 10px; border-radius: 6px; border: 1px solid #1e293b;">
+        <span style="color: #f59e0b; font-weight: bold;">⏱️ サーバ処理滞留時間:</span>
+        
+        <!-- WEB Stay -->
+        <div style="display: flex; align-items: center; gap: 4px;">
+          <span style="color: #38bdf8; font-weight: bold;">WEB:</span>
+          <input type="range" id="slider-stay-web" min="0" max="4" step="0.5" value="0.5" style="width: 65px; accent-color: #38bdf8; cursor: pointer;" oninput="onStayChange('web', this.value)">
+          <span id="label-stay-web" style="color: #fff; min-width: 28px; font-weight: bold;">0.5s</span>
+        </div>
+
+        <!-- AP Stay -->
+        <div style="display: flex; align-items: center; gap: 4px;">
+          <span style="color: #c084fc; font-weight: bold;">AP:</span>
+          <input type="range" id="slider-stay-ap" min="0" max="4" step="0.5" value="1.0" style="width: 65px; accent-color: #c084fc; cursor: pointer;" oninput="onStayChange('ap', this.value)">
+          <span id="label-stay-ap" style="color: #fff; min-width: 28px; font-weight: bold;">1.0s</span>
+        </div>
+
+        <!-- DB Stay -->
+        <div style="display: flex; align-items: center; gap: 4px;">
+          <span style="color: #34d399; font-weight: bold;">DB:</span>
+          <input type="range" id="slider-stay-db" min="0" max="4" step="0.5" value="0.8" style="width: 65px; accent-color: #34d399; cursor: pointer;" oninput="onStayChange('db', this.value)">
+          <span id="label-stay-db" style="color: #fff; min-width: 28px; font-weight: bold;">0.8s</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Direction Color Legend -->
+    <div style="display: flex; align-items: center; gap: 8px; font-family: monospace; font-size: 10px;">
+      <span style="color: #94a3b8;">HTTPフロー:</span>
+      <span style="display: flex; align-items: center; gap: 3px; color: #38bdf8;">
+        <span style="display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #38bdf8; box-shadow: 0 0 6px #38bdf8;"></span>
+        行き(青)
+      </span>
+      <span style="color: #64748b;">|</span>
+      <span style="display: flex; align-items: center; gap: 3px; color: #10b981;">
+        <span style="display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #10b981; box-shadow: 0 0 6px #10b981;"></span>
+        帰り(正常系 200/SORRY: 緑)
+      </span>
+      <span style="color: #64748b;">|</span>
+      <span style="display: flex; align-items: center; gap: 3px; color: #ef4444;">
+        <span style="display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #ef4444; box-shadow: 0 0 6px #ef4444;"></span>
+        帰り(エラー 503: 赤)
+      </span>
+    </div>
+  </div>
+
+  <!-- Main Workspace Layout -->
+  <div class="main-body">
+
+    <!-- LEFT: Architecture Topology Diagram & Canvas Area -->
+    <div style="flex: 1; display: flex; flex-direction: column; background: var(--bg-dark); position: relative; padding: 12px; overflow-y: auto;" class="cyber-grid">
+      
+      <!-- System Legends -->
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; padding: 0 4px; font-family: monospace; font-size: 10.5px;">
+        <div style="display: flex; gap: 10px;">
+          <span id="legend-sys-a" style="background: rgba(8, 47, 73, 0.7); border: 1px solid #0369a1; padding: 1px 6px; border-radius: 4px; color: #7dd3fc;">
+            <b style="color: #38bdf8;">A系 (偶数)</b>: Web-02, 04 ➜ AP-A VIP ➜ AP-02, 04, 06
+          </span>
+          <span id="legend-sys-b" style="background: rgba(59, 7, 100, 0.7); border: 1px solid #6b21a8; padding: 1px 6px; border-radius: 4px; color: #d8b4fe;">
+            <b style="color: #c084fc;">B系 (奇数)</b>: Web-01, 03 ➜ AP-B VIP ➜ AP-01, 03, 05
+          </span>
+          <span id="legend-sys-sorry" style="background: rgba(120, 53, 15, 0.7); border: 1px solid #b45309; padding: 1px 6px; border-radius: 4px; color: #fde68a;">
+            <b style="color: #f59e0b;">SORRY</b>: Web4台down時のみ発動
+          </span>
+        </div>
+        <div style="color: #34d399; font-size: 9.5px;">
+          ● LB死活監視: 常時稼働中（down検知で転送停止）
+        </div>
+      </div>
+
+      <!-- Topology Nodes Canvas Container -->
+      <div id="topology-container" style="position: relative; flex: 1; min-height: 570px; background: rgba(11, 17, 32, 0.85); border: 1px solid #1e293b; border-radius: 10px; padding: 12px; display: flex; flex-direction: column; justify-content: space-between; overflow: hidden; box-shadow: 0 8px 30px rgba(0,0,0,0.6);">
+        
+        <!-- Canvas for animated packets & wiring -->
+        <canvas id="packetCanvas" style="position: absolute; inset: 0; pointer-events: none; z-index: 10; width: 100%; height: 100%;"></canvas>
+
+        <!-- TOPOLOGY GRID -->
+        <div class="topo-grid">
+
+          <!-- STAGE 1: Client Layer (1〜10 Clients) -->
+          <div class="stage-col">
+            <div class="stage-header" style="justify-content: space-between; padding: 0 4px;">
+              <span>1. Clients (<span id="client-count-header" style="color: #38bdf8; font-weight: bold;">4台</span>)</span>
+              <span id="client-total-active" style="color: #34d399; font-weight: bold;">0 conn</span>
+            </div>
+            <div class="stage-body" style="align-items: center; justify-content: center;">
+              <div id="clients-list-container" style="display: flex; flex-direction: column; justify-content: center; gap: 4px; width: 100%; max-width: 140px; overflow-y: auto; max-height: 500px; padding: 2px 2px 2px 0;">
+                <!-- Injected by JS -->
+              </div>
+              <div id="node-client" style="display: none;"></div>
+            </div>
+          </div>
+
+          <!-- STAGE 2: External LB Layer -->
+          <div class="stage-col">
+            <div class="stage-header">2. External LB</div>
+            <div class="stage-body" style="align-items: center; justify-content: center;">
+              <div id="node-ext_lb" class="node-card" style="width: 100%; max-width: 155px; text-align: center; border-color: rgba(99, 102, 241, 0.6); padding: 8px 6px;">
+                <div style="width: 32px; height: 32px; border-radius: 6px; background: #1e1b4b; border: 1px solid #6366f1; margin: 0 auto 4px; display: flex; align-items: center; justify-content: center;">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#818cf8" stroke-width="2"><circle cx="18" cy="18" r="3"></circle><circle cx="6" cy="6" r="3"></circle><path d="M13 6h3a2 2 0 0 1 2 2v7"></path><line x1="6" y1="9" x2="6" y2="21"></line></svg>
+                </div>
+                <div id="ext-lb-title" style="font-size: 11px; font-weight: bold; color: #fff;">Web代表 VIP</div>
+                <div id="ext-lb-ip" style="font-size: 7.5px; color: #94a3b8; font-family: monospace;">192.168.1.10:443</div>
+
+                <!-- Live Health status on Ext LB -->
+                <div style="margin-top: 6px; padding-top: 5px; border-top: 1px solid #1e293b; font-family: monospace; font-size: 8.5px; text-align: left;">
+                  <div style="display: flex; justify-content: space-between; margin-bottom: 1px;">
+                    <span id="lbl-ext-a" style="color: #38bdf8;">Web A系:</span>
+                    <span id="lb-web-a-status" style="color: #34d399; font-weight: bold;">2/2 ACTIVE</span>
+                  </div>
+                  <div style="display: flex; justify-content: space-between; margin-bottom: 1px;">
+                    <span id="lbl-ext-b" style="color: #c084fc;">Web B系:</span>
+                    <span id="lb-web-b-status" style="color: #34d399; font-weight: bold;">2/2 ACTIVE</span>
+                  </div>
+                  <div style="display: flex; justify-content: space-between; border-top: 1px solid #1e293b; padding-top: 1px;">
+                    <span id="lbl-ext-sorry" style="color: #f59e0b;">SORRY:</span>
+                    <span id="lb-sorry-status" style="color: #94a3b8; font-weight: bold;">up/standby</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- STAGE 3: Web Tier (4 Nodes + SORRY) - Symmetric Upper A / Center SORRY / Lower B -->
+          <div class="stage-col">
+            <div class="stage-header">3. Web層 (4台+SORRY)</div>
+            <div class="stage-body">
+              <!-- Upper A-System Web (02, 04) -->
+              <div class="tier-zone-a">
+                <div class="group-box group-box-a">
+                  <div class="group-title-a">
+                    <b>A系 Web (偶数)</b> <span>➜ AP-A VIP</span>
+                  </div>
+                  <div id="card-web_02" class="node-card"></div>
+                  <div id="card-web_04" class="node-card"></div>
+                </div>
+              </div>
+
+              <!-- Center: SORRY -->
+              <div class="tier-zone-center">
+                <div id="card-web_sorry" class="node-card" style="border-color: #f59e0b; width: 100%;"></div>
+              </div>
+
+              <!-- Lower B-System Web (01, 03) -->
+              <div class="tier-zone-b">
+                <div class="group-box group-box-b">
+                  <div class="group-title-b">
+                    <b>B系 Web (奇数)</b> <span>➜ AP-B VIP</span>
+                  </div>
+                  <div id="card-web_01" class="node-card"></div>
+                  <div id="card-web_03" class="node-card"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- STAGE 4: Internal LB Layer (Split VIP-A / VIP-B) - Symmetric Upper A / Center / Lower B -->
+          <div class="stage-col">
+            <div class="stage-header">4. Internal LB</div>
+            <div class="stage-body">
+              <!-- Upper VIP-A -->
+              <div class="tier-zone-a">
+                <div id="node-vip_a" class="node-card" style="border-color: rgba(56, 189, 248, 0.5); padding: 8px 6px; text-align: center; width: 100%;">
+                  <div id="vip-a-name" style="font-size: 10px; font-weight: bold; color: #38bdf8;">AP-A系代表 VIP</div>
+                  <div id="vip-a-ip" style="font-size: 7.5px; color: #94a3b8; font-family: monospace;">192.168.10.10:8080</div>
+                  <div id="vip-a-note" style="margin-top: 4px; font-size: 7.5px; background: rgba(8, 47, 73, 0.4); padding: 2px 4px; border-radius: 3px; color: #7dd3fc;">
+                    Web A系 ➜ AP A系(02,04,06)
+                  </div>
+                  <div style="margin-top: 4px; font-size: 7.5px; font-family: monospace; display: flex; justify-content: space-between;">
+                    <span>AP健全台数:</span>
+                    <span id="vip-a-count" style="color: #38bdf8; font-weight: bold;">3/3台</span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Center Axis Spacer (Aligned with SORRY) -->
+              <div class="tier-zone-center">
+                <div style="width: 80%; height: 1px; background: linear-gradient(90deg, transparent, rgba(51, 65, 85, 0.6), transparent);"></div>
+              </div>
+
+              <!-- Lower VIP-B -->
+              <div class="tier-zone-b">
+                <div id="node-vip_b" class="node-card" style="border-color: rgba(192, 132, 252, 0.5); padding: 8px 6px; text-align: center; width: 100%;">
+                  <div id="vip-b-name" style="font-size: 10px; font-weight: bold; color: #c084fc;">AP-B系代表 VIP</div>
+                  <div id="vip-b-ip" style="font-size: 7.5px; color: #94a3b8; font-family: monospace;">192.168.20.10:8080</div>
+                  <div id="vip-b-note" style="margin-top: 4px; font-size: 7.5px; background: rgba(59, 7, 100, 0.4); padding: 2px 4px; border-radius: 3px; color: #d8b4fe;">
+                    Web B系 ➜ AP B系(01,03,05)
+                  </div>
+                  <div style="margin-top: 4px; font-size: 7.5px; font-family: monospace; display: flex; justify-content: space-between;">
+                    <span>AP健全台数:</span>
+                    <span id="vip-b-count" style="color: #c084fc; font-weight: bold;">3/3台</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- STAGE 5: AP Tier (6 Nodes) - Symmetric Upper A / Center / Lower B -->
+          <div class="stage-col">
+            <div class="stage-header">5. AP層 (Java war / 6台)</div>
+            <div class="stage-body">
+              <!-- Upper A-System AP (02, 04, 06) -->
+              <div class="tier-zone-a">
+                <div class="group-box group-box-a" style="gap: 3px;">
+                  <div class="group-title-a">
+                    <b>A系 AP (偶数)</b>
+                    <span style="font-size: 7px; color: #7dd3fc;">JSESSIONID発行</span>
+                  </div>
+                  <div id="card-ap_02" class="node-card"></div>
+                  <div id="card-ap_04" class="node-card"></div>
+                  <div id="card-ap_06" class="node-card"></div>
+                </div>
+              </div>
+
+              <!-- Center Axis Spacer (Aligned with SORRY) -->
+              <div class="tier-zone-center">
+                <div style="width: 80%; height: 1px; background: linear-gradient(90deg, transparent, rgba(51, 65, 85, 0.6), transparent);"></div>
+              </div>
+
+              <!-- Lower B-System AP (01, 03, 05) -->
+              <div class="tier-zone-b">
+                <div class="group-box group-box-b" style="gap: 3px;">
+                  <div class="group-title-b">
+                    <b>B系 AP (奇数)</b>
+                    <span style="font-size: 7px; color: #d8b4fe;">JSESSIONID発行</span>
+                  </div>
+                  <div id="card-ap_01" class="node-card"></div>
+                  <div id="card-ap_03" class="node-card"></div>
+                  <div id="card-ap_05" class="node-card"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- STAGE 6: DB Tier -->
+          <div class="stage-col">
+            <div class="stage-header">6. DB層 (共通)</div>
+            <div class="stage-body" style="align-items: center; justify-content: center;">
+              <div id="node-db" class="node-card" style="width: 100%; max-width: 135px; text-align: center; border-color: rgba(16, 185, 129, 0.5); padding: 10px 6px;">
+                <div style="width: 32px; height: 32px; border-radius: 6px; background: #064e3b; border: 1px solid #10b981; margin: 0 auto 4px; display: flex; align-items: center; justify-content: center;">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#34d399" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path></svg>
+                </div>
+                <div id="db-title" style="font-size: 11px; font-weight: bold; color: #fff;">Database</div>
+                <div id="db-subtitle" style="font-size: 8px; color: #6ee7b7; font-family: monospace;">SQL実行 & レスポンス生成</div>
+
+                <div style="margin-top: 8px; padding-top: 5px; border-top: 1px solid #1e293b; font-family: monospace; font-size: 8.5px; text-align: left; color: #94a3b8;">
+                  <div style="display: flex; justify-content: space-between;">
+                    <span>滞留SQL:</span>
+                    <span id="db-conn" style="color: #34d399; font-weight: bold;">0 conn</span>
+                  </div>
+                  <div style="display: flex; justify-content: space-between;">
+                    <span>設定滞留:</span>
+                    <span id="db-stay-display" style="color: #fff;">0.8s</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- Live Terminal Event Stream -->
+      <div style="margin-top: 8px; background: #090d18; border: 1px solid #1e293b; border-radius: 8px; padding: 6px 10px; box-shadow: 0 4px 15px rgba(0,0,0,0.5);">
+        <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(30, 41, 59, 0.8); padding-bottom: 3px; margin-bottom: 3px;">
+          <span style="font-family: monospace; font-size: 9.5px; color: #94a3b8; display: flex; align-items: center; gap: 5px;">
+            <span style="display: inline-block; width: 5px; height: 5px; border-radius: 50%; background: #34d399;"></span>
+            <b>LB 死活監視テレメトリ ＆ ジョブ実行イベントストリーム</b>
+          </span>
+          <span style="font-size: 8.5px; font-family: monospace; color: #64748b;">Live Telemetry</span>
+        </div>
+        <div id="terminal-logs" style="height: 60px; overflow-y: auto; font-family: monospace; font-size: 9.5px; display: flex; flex-direction: column; gap: 2px;">
+          <!-- Log entries injected by JS -->
+        </div>
+      </div>
+
+    </div>
+
+    <!-- RIGHT: Dedicated Real-time Job Execution & Session Management Panel -->
+    <div style="width: 100%; max-width: 420px; background: var(--bg-header); border-top: 1px solid var(--border-dark); border-left: 1px solid var(--border-dark); display: flex; flex-direction: column; overflow-y: auto;">
+      
+      <!-- Panel Header Tabs: Jobs / Sessions / Guide -->
+      <div style="display: flex; border-bottom: 1px solid var(--border-dark); font-size: 11px; font-weight: 600;">
+        <button onclick="setRightTab('jobs')" id="rtab-btn-jobs" class="btn" style="flex: 1; border-radius: 0; padding: 9px; color: #38bdf8; border-bottom: 2px solid #38bdf8; background: rgba(15, 23, 42, 0.5);">
+          運用ジョブ実行 (9種)
+        </button>
+        <button onclick="setRightTab('sessions')" id="rtab-btn-sessions" class="btn" style="flex: 1; border-radius: 0; padding: 9px; color: #94a3b8; background: transparent; border-bottom: 2px solid transparent;">
+          セッションテーブル
+        </button>
+        <button onclick="setRightTab('explain')" id="rtab-btn-explain" class="btn" style="flex: 1; border-radius: 0; padding: 9px; color: #94a3b8; background: transparent; border-bottom: 2px solid transparent;">
+          wait仕様解説
+        </button>
+      </div>
+
+      <!-- Right Tab Content Area (Rendered Once & Updated Only On Event) -->
+      <div id="right-tab-content" style="padding: 12px; display: flex; flex-direction: column; gap: 10px;">
+        <!-- Injected by JS on tab change or job event, NEVER every frame! -->
+      </div>
+
+    </div>
+
+  </div>
+
+  <!-- Pure Vanilla JS Engine (Zero-Dependencies) -->
+  <script>
+    // =========================================================================
+    // Simulation Engine & State Machine
+    // =========================================================================
+
+    // 外部設定ファイル (config.js) からサーバ定義を動的に読み込み初期化
+    function initNodesFromConfig() {
+      const nodes = {};
+      const cfg = window.SIM_CONFIG;
+      if (cfg && cfg.servers) {
+        if (cfg.servers.web) {
+          cfg.servers.web.forEach(w => {
+            nodes[w.id] = {
+              id: w.id,
+              name: w.name,
+              ip: w.ip,
+              system: w.system,
+              lbStatus: w.initialStatus || (w.id === 'web_sorry' ? 'up/standby' : 'up/active'),
+              activeConnections: 0,
+              cpu: 20,
+              drainTimer: 0
+            };
+          });
+        }
+        if (cfg.servers.ap) {
+          cfg.servers.ap.forEach(a => {
+            nodes[a.id] = {
+              id: a.id,
+              name: a.name,
+              ip: a.ip,
+              system: a.system,
+              lbStatus: a.initialStatus || 'up/active',
+              version: a.version || 'v1.0.0',
+              isDeploying: false,
+              deployProgress: 0,
+              activeConnections: 0,
+              cpu: 22
+            };
+          });
+        }
+      }
+      // フォールバック（config.js が読み込めなかった場合のデフォルト値）
+      if (Object.keys(nodes).length === 0) {
+        return {
+          web_02: { id: 'web_02', name: 'Web-02', ip: '10.0.1.12', system: 'A', lbStatus: 'up/active', activeConnections: 0, cpu: 20, drainTimer: 0 },
+          web_04: { id: 'web_04', name: 'Web-04', ip: '10.0.1.14', system: 'A', lbStatus: 'up/active', activeConnections: 0, cpu: 20, drainTimer: 0 },
+          web_01: { id: 'web_01', name: 'Web-01', ip: '10.0.2.11', system: 'B', lbStatus: 'up/active', activeConnections: 0, cpu: 20, drainTimer: 0 },
+          web_03: { id: 'web_03', name: 'Web-03', ip: '10.0.2.13', system: 'B', lbStatus: 'up/active', activeConnections: 0, cpu: 20, drainTimer: 0 },
+          web_sorry: { id: 'web_sorry', name: 'SORRY', ip: '10.0.0.99', system: 'SORRY', lbStatus: 'up/standby', activeConnections: 0, cpu: 5 },
+          ap_02: { id: 'ap_02', name: 'AP-02', ip: '10.0.10.22', system: 'A', lbStatus: 'up/active', version: 'v1.0.0', isDeploying: false, deployProgress: 0, activeConnections: 0, cpu: 22 },
+          ap_04: { id: 'ap_04', name: 'AP-04', ip: '10.0.10.24', system: 'A', lbStatus: 'up/active', version: 'v1.0.0', isDeploying: false, deployProgress: 0, activeConnections: 0, cpu: 22 },
+          ap_06: { id: 'ap_06', name: 'AP-06', ip: '10.0.10.26', system: 'A', lbStatus: 'up/active', version: 'v1.0.0', isDeploying: false, deployProgress: 0, activeConnections: 0, cpu: 22 },
+          ap_01: { id: 'ap_01', name: 'AP-01', ip: '10.0.20.21', system: 'B', lbStatus: 'up/active', version: 'v1.0.0', isDeploying: false, deployProgress: 0, activeConnections: 0, cpu: 22 },
+          ap_03: { id: 'ap_03', name: 'AP-03', ip: '10.0.20.23', system: 'B', lbStatus: 'up/active', version: 'v1.0.0', isDeploying: false, deployProgress: 0, activeConnections: 0, cpu: 22 },
+          ap_05: { id: 'ap_05', name: 'AP-05', ip: '10.0.20.25', system: 'B', lbStatus: 'up/active', version: 'v1.0.0', isDeploying: false, deployProgress: 0, activeConnections: 0, cpu: 22 }
+        };
+      }
+      return nodes;
+    }
+
+    const State = {
+      isRunning: true,
+      simSpeed: 1,
+      activeRightTab: 'jobs',
+      clientCount: 4, // 1〜10台
+      reqPerClient: 5, // 0〜30 r/s
+      clientReqRate: 20, // 合計流量 = clientCount * reqPerClient
+      stayDuration: {
+        web: 0.5, // seconds stay
+        ap: 1.0,
+        db: 0.8
+      },
+      stats: {
+        totalRequests: 0,
+        successCount: 0,
+        errorCount: 0,
+        sorryCount: 0,
+        systemACount: 0,
+        systemBCount: 0
+      },
+      clients: [],
+      nodes: initNodesFromConfig(),
+      sessionTable: [],
+      logs: []
+    };
+
+    // 外部定義ファイルから負荷分散NW装置の表示内容を適用
+    function applyNetworkDevicesConfig() {
+      const cfg = window.SIM_CONFIG;
+      if (!cfg) return;
+
+      // 1. External LB
+      if (cfg.networkDevices && cfg.networkDevices.externalLb) {
+        const ext = cfg.networkDevices.externalLb;
+        const elTitle = document.getElementById('ext-lb-title');
+        if (elTitle && ext.name) elTitle.innerText = ext.name;
+        const elIp = document.getElementById('ext-lb-ip');
+        if (elIp && ext.ip) elIp.innerText = ext.ip;
+        if (ext.labelA) {
+          const lA = document.getElementById('lbl-ext-a');
+          if (lA) lA.innerText = ext.labelA;
+        }
+        if (ext.labelB) {
+          const lB = document.getElementById('lbl-ext-b');
+          if (lB) lB.innerText = ext.labelB;
+        }
+        if (ext.labelSorry) {
+          const lS = document.getElementById('lbl-ext-sorry');
+          if (lS) lS.innerText = ext.labelSorry;
+        }
+      }
+
+      // 2. Internal LB (VIP-A, VIP-B)
+      if (cfg.networkDevices && cfg.networkDevices.internalLb) {
+        const intLb = cfg.networkDevices.internalLb;
+        if (intLb.vipA) {
+          const va = intLb.vipA;
+          const vaName = document.getElementById('vip-a-name');
+          if (vaName && va.name) vaName.innerText = va.name;
+          const vaIp = document.getElementById('vip-a-ip');
+          if (vaIp && va.ip) vaIp.innerText = va.ip;
+          const vaNote = document.getElementById('vip-a-note');
+          if (vaNote && va.routingNote) vaNote.innerText = va.routingNote;
+        }
+        if (intLb.vipB) {
+          const vb = intLb.vipB;
+          const vbName = document.getElementById('vip-b-name');
+          if (vbName && vb.name) vbName.innerText = vb.name;
+          const vbIp = document.getElementById('vip-b-ip');
+          if (vbIp && vb.ip) vbIp.innerText = vb.ip;
+          const vbNote = document.getElementById('vip-b-note');
+          if (vbNote && vb.routingNote) vbNote.innerText = vb.routingNote;
+        }
+      }
+
+      // 3. Database
+      if (cfg.networkDevices && cfg.networkDevices.database) {
+        const db = cfg.networkDevices.database;
+        const dbTitle = document.getElementById('db-title');
+        if (dbTitle && db.name) dbTitle.innerText = db.name;
+        const dbSub = document.getElementById('db-subtitle');
+        if (dbSub && db.subTitle) dbSub.innerText = db.subTitle;
+      }
+
+      // 4. System Legends (上部バナー)
+      if (cfg.servers) {
+        const webA = (cfg.servers.web || []).filter(w => w.system === 'A').map(w => w.name).join(', ');
+        const apA = (cfg.servers.ap || []).filter(a => a.system === 'A').map(a => a.name).join(', ');
+        const webB = (cfg.servers.web || []).filter(w => w.system === 'B').map(w => w.name).join(', ');
+        const apB = (cfg.servers.ap || []).filter(a => a.system === 'B').map(a => a.name).join(', ');
+        const vipAName = (cfg.networkDevices && cfg.networkDevices.internalLb && cfg.networkDevices.internalLb.vipA && cfg.networkDevices.internalLb.vipA.name) ? cfg.networkDevices.internalLb.vipA.name.replace('系代表', '') : 'AP-A VIP';
+        const vipBName = (cfg.networkDevices && cfg.networkDevices.internalLb && cfg.networkDevices.internalLb.vipB && cfg.networkDevices.internalLb.vipB.name) ? cfg.networkDevices.internalLb.vipB.name.replace('系代表', '') : 'AP-B VIP';
+
+        const legA = document.getElementById('legend-sys-a');
+        if (legA && webA) {
+          legA.innerHTML = `<b style="color: #38bdf8;">A系 (偶数)</b>: ${webA} ➜ ${vipAName} ➜ ${apA}`;
+        }
+        const legB = document.getElementById('legend-sys-b');
+        if (legB && webB) {
+          legB.innerHTML = `<b style="color: #c084fc;">B系 (奇数)</b>: ${webB} ➜ ${vipBName} ➜ ${apB}`;
+        }
+      }
+    }
+
+    // JSESSIONIDはAPサーバにて採番管理される (jvmRoute形式: JSES-[A/B]-[AP号機]-[Hex])
+    function generateSessionId(sys, apNodeName) {
+      const chars = '0123456789ABCDEF';
+      let rand = '';
+      for (let i = 0; i < 4; i++) {
+        rand += chars[Math.floor(Math.random() * chars.length)];
+      }
+      const apShort = apNodeName ? apNodeName.replace('-', '') : (sys === 'A' ? 'AP02' : 'AP01');
+      return `JSES-${sys || 'X'}-${apShort}-${rand}`;
+    }
+
+    function initClients() {
+      State.clients = [];
+      const webA = Object.values(State.nodes).filter(n => n.id.startsWith('web_') && n.system === 'A');
+      const webB = Object.values(State.nodes).filter(n => n.id.startsWith('web_') && n.system === 'B');
+      const apA = Object.values(State.nodes).filter(n => n.id.startsWith('ap_') && n.system === 'A');
+      const apB = Object.values(State.nodes).filter(n => n.id.startsWith('ap_') && n.system === 'B');
+
+      for (let i = 1; i <= 10; i++) {
+        const sys = (i % 2 === 0) ? 'A' : 'B';
+        const webList = (sys === 'A') ? webA : webB;
+        const apList = (sys === 'A') ? apA : apB;
+
+        const web = webList.length > 0 ? webList[(Math.floor((i - 1) / 2)) % webList.length].name : 'Web-01';
+        const ap = apList.length > 0 ? apList[(i - 1) % apList.length].name : 'AP-01';
+
+        // 初期表示中の4台のみ通常稼働セッションあり、5台目以降(5〜10)は新規追加用のため未所持(null)
+        const isInitialActive = (i <= 4);
+        const sess = isInitialActive ? generateSessionId(sys, ap) : null;
+
+        State.clients.push({
+          id: i,
+          name: `Client-${String(i).padStart(2, '0')}`,
+          ip: `192.168.1.${100 + i}`,
+          sessionId: sess,
+          targetWeb: isInitialActive ? web : null,
+          targetAp: isInitialActive ? ap : null,
+          system: isInitialActive ? sys : null,
+          hasSession: isInitialActive,
+          wasError: false,
+          activeConns: 0
+        });
+      }
+      renderClientCards();
+      syncSessionTable();
+    }
+
+    function renderClientCards() {
+      const container = document.getElementById('clients-list-container');
+      if (!container) return;
+
+      const activeClients = State.clients.slice(0, State.clientCount);
+      container.innerHTML = activeClients.map(c => {
+        const hasSess = c.sessionId !== null;
+        let sessDisplay = '';
+        if (hasSess) {
+          sessDisplay = c.sessionId;
+        } else if (c.wasError) {
+          sessDisplay = '<span style="color: #ef4444; font-weight: bold; animation: pulse-amber 1s infinite;">(再発行待ち)</span>';
+        } else {
+          sessDisplay = '<span style="color: #94a3b8; font-weight: bold;">(新規接続)</span>';
+        }
+
+        const borderColor = hasSess 
+          ? (c.system === 'A' ? 'rgba(56, 189, 248, 0.45)' : 'rgba(192, 132, 252, 0.45)') 
+          : (c.wasError ? 'rgba(239, 68, 68, 0.55)' : 'rgba(148, 163, 184, 0.4)');
+        const titleColor = hasSess ? (c.system === 'A' ? '#38bdf8' : '#c084fc') : (c.wasError ? '#fca5a5' : '#cbd5e1');
+        const dotColor = hasSess ? '#34d399' : (c.wasError ? '#ef4444' : '#94a3b8');
+
+        return `
+          <div id="card-client-${c.id}" class="node-card" style="padding: 3px 6px; border-color: ${borderColor}; background: rgba(15, 23, 42, 0.9); min-height: 38px; display: flex; flex-direction: column; justify-content: center; box-shadow: 0 2px 8px rgba(0,0,0,0.4);">
+            <div style="display: flex; justify-content: space-between; align-items: center; line-height: 1.1;">
+              <span style="font-weight: bold; font-family: monospace; color: ${titleColor}; font-size: 9px; display: flex; align-items: center; gap: 3px;">
+                <span style="display: inline-block; width: 5px; height: 5px; border-radius: 50%; background: ${dotColor};"></span>
+                ${c.name}
+              </span>
+              <span style="font-size: 7.5px; color: #64748b; font-family: monospace;">${c.ip}</span>
+            </div>
+            <div style="margin-top: 2px; font-size: 8px; font-family: monospace; display: flex; justify-content: space-between; align-items: center;">
+              <span style="color: #94a3b8;">JSES:</span>
+              <span id="sess-val-client-${c.id}" style="font-weight: bold; color: ${hasSess ? (c.system === 'A' ? '#38bdf8' : '#c084fc') : (c.wasError ? '#ef4444' : '#94a3b8')};">${sessDisplay}</span>
+            </div>
+            <div style="margin-top: 1px; font-size: 7.5px; font-family: monospace; color: #64748b; display: flex; justify-content: space-between;">
+              <span>Sticky先:</span>
+              <span style="color: #cbd5e1;">${hasSess ? `${c.targetWeb} ➜ <b style="color:${c.system === 'A' ? '#38bdf8' : '#c084fc'}">${c.targetAp}</b>` : '(未定)'}</span>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function syncSessionTable() {
+      const activeClients = State.clients.slice(0, State.clientCount);
+      State.sessionTable = activeClients
+        .filter(c => c.sessionId !== null)
+        .map(c => ({
+          sessionId: c.sessionId,
+          clientIp: c.ip,
+          targetWeb: c.targetWeb,
+          targetAp: c.targetAp,
+          system: c.system,
+          active: c.activeConns,
+          clientName: c.name
+        }));
+      if (State.activeRightTab === 'sessions') {
+        renderRightPanel();
+      }
+    }
+
+    function getTimestamp() {
+      const d = new Date();
+      return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}:${d.getSeconds().toString().padStart(2, '0')}.${Math.floor(d.getMilliseconds() / 100)}`;
+    }
+
+    function addLog(level, message, color = '#cbd5e1') {
+      State.logs.unshift({ time: getTimestamp(), level, message, color });
+      if (State.logs.length > 50) State.logs.pop();
+      renderLogs();
+    }
+
+    function renderLogs() {
+      const el = document.getElementById('terminal-logs');
+      if (!el) return;
+      el.innerHTML = State.logs.map(log => {
+        let badgeColor = '#34d399';
+        if (log.level === 'WARN') badgeColor = '#f59e0b';
+        if (log.level === 'ERROR' || log.level === 'ALERT') badgeColor = '#ef4444';
+        if (log.level === 'JOB') badgeColor = '#38bdf8';
+        return `
+          <div style="display: flex; gap: 5px; align-items: flex-start; line-height: 1.25;">
+            <span style="color: #64748b; font-size: 8px;">${log.time}</span>
+            <span style="background: rgba(255,255,255,0.06); color: ${badgeColor}; border: 1px solid ${badgeColor}; padding: 0 3px; border-radius: 3px; font-size: 7.5px; font-weight: bold;">${log.level}</span>
+            <span style="color: ${log.color};">${log.message}</span>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function checkSorryTrigger() {
+      const webNodes = Object.values(State.nodes).filter(n => n.id.startsWith('web_') && n.system !== 'SORRY');
+      // SORRYはWEB全台が死んだdownになったときにのみup/activeになります
+      const allWebDown = (webNodes.length > 0) && webNodes.every(n => n.lbStatus === 'down/-');
+
+      if (allWebDown) {
+        if (State.nodes.web_sorry.lbStatus !== 'up/active') {
+          State.nodes.web_sorry.lbStatus = 'up/active';
+          addLog('ALERT', '🚨 WEB全台が全て死んだ (down/-) ことを検知！External LBがSORRYサーバを緊急昇格 (up/active)。503 Sorry Pageを返却します。', '#f59e0b');
+          renderAllCardsFull();
+        }
+      } else {
+        if (State.nodes.web_sorry.lbStatus === 'up/active') {
+          State.nodes.web_sorry.lbStatus = 'up/standby';
+          addLog('INFO', 'WEB稼働ノード復旧を検知。SORRYサーバは待機状態 (up/standby) に戻りました。', '#34d399');
+          renderAllCardsFull();
+        }
+      }
+    }
+
+    // Node Health Toggle (死活監視 障害シミュレーション)
+    window.toggleNodeHealth = function(id) {
+      const node = State.nodes[id];
+      if (!node || node.id === 'web_sorry') return;
+
+      if (node.lbStatus === 'down/-') {
+        // Recover to up/active
+        node.lbStatus = 'up/active';
+        node.drainTimer = 0;
+        addLog('INFO', `✅ [死活監視復旧] ${node.name}: ヘルスチェック応答再開を検知。ステータス: up/active (組込復帰)。`, '#34d399');
+      } else {
+        // Drop to down/-
+        if (activeDrainTimers[id]) {
+          clearInterval(activeDrainTimers[id]);
+          delete activeDrainTimers[id];
+        }
+        node.drainTimer = 0;
+        node.lbStatus = 'down/-';
+        const aborted = node.activeConnections;
+        node.activeConnections = 0;
+        State.stats.errorCount += aborted;
+
+        // Abort in-flight packets on this node -> Return 503 error (赤パケット) to clients
+        for (let i = 0; i < packets.length; i++) {
+          const p = packets[i];
+          if ((p.webNode && p.webNode.id === id) || (p.apNode && p.apNode.id === id)) {
+            p.isError = true;
+            p.errorCode = 503;
+            p.isReturning = true;
+            p.stayTimer = 0;
+            p.currentHop = 0;
+            if (p.clientRef) {
+              const clientCardId = 'card-client-' + p.clientRef.id;
+              p.returnHops = [p.webNode ? ('card-' + p.webNode.id) : 'node-ext_lb', 'node-ext_lb', clientCardId];
+            }
+          }
+        }
+        if (node.id.startsWith('web_')) {
+          State.sessionTable = State.sessionTable.filter(s => s.targetWeb !== node.name);
+        }
+        addLog('ERROR', `💥 [死活監視DOWN検知] ${node.name}: ヘルスチェック応答途絶！ステータス: down/-。LBが切り離し実施 (${aborted} conn強制切断)。`, '#ef4444');
+      }
+
+      checkSorryTrigger();
+      renderAllCardsFull();
+      renderRightPanel();
+    };
+
+    window.failAllWeb = function() {
+      Object.values(State.nodes).forEach(node => {
+        if (node.id.startsWith('web_') && node.system !== 'SORRY') {
+          if (activeDrainTimers[node.id]) {
+            clearInterval(activeDrainTimers[node.id]);
+            delete activeDrainTimers[node.id];
+          }
+          node.drainTimer = 0;
+          node.lbStatus = 'down/-';
+          State.stats.errorCount += node.activeConnections;
+          node.activeConnections = 0;
+        }
+      });
+      State.sessionTable = [];
+      packets.forEach(p => p.hasFailed = true);
+      addLog('ALERT', '🚨 【死活監視テスト】WEB全台ダウンシミュレーション！全台 down/- へ遷移。', '#ef4444');
+      checkSorryTrigger();
+      renderAllCardsFull();
+      renderRightPanel();
+    };
+
+    window.recoverAllWeb = function() {
+      Object.values(State.nodes).forEach(node => {
+        if (node.id.startsWith('web_') && node.system !== 'SORRY') {
+          node.lbStatus = 'up/active';
+          node.drainTimer = 0;
+        }
+      });
+      addLog('INFO', '✅ 【死活監視復旧】WEB全台ヘルスチェック正常復帰。全台 up/active。', '#34d399');
+      checkSorryTrigger();
+      renderAllCardsFull();
+      renderRightPanel();
+    };
+
+    window.failAllAp = function() {
+      Object.values(State.nodes).forEach(node => {
+        if (node.id.startsWith('ap_')) {
+          node.lbStatus = 'down/-';
+          State.stats.errorCount += node.activeConnections;
+          node.activeConnections = 0;
+        }
+      });
+      packets.forEach(p => { if (!p.isSorry && !p.isReturning) p.hasFailed = true; });
+      addLog('ALERT', '🚨 【死活監視テスト】AP全滅シミュレーション！全台 down/-。Internal LBが503エラー(赤パケット)を返却します。', '#ef4444');
+      renderAllCardsFull();
+      renderRightPanel();
+    };
+
+    window.recoverAllAp = function() {
+      Object.values(State.nodes).forEach(node => {
+        if (node.id.startsWith('ap_')) {
+          node.lbStatus = 'up/active';
+        }
+      });
+      addLog('INFO', '✅ 【死活監視復旧】AP全台ヘルスチェック正常復帰。全台 up/active。正常通信を再開します。', '#34d399');
+      renderAllCardsFull();
+      renderRightPanel();
+    };
+
+    // =========================================================================
+    // 実務運用ジョブ実装 (外部定義ファイル config.js 連動)
+    // =========================================================================
+    let activeDrainTimers = {};
+
+    window.executeJob = function(jobTypeOrId) {
+      let job = null;
+      if (window.SIM_CONFIG && window.SIM_CONFIG.jobs) {
+        job = window.SIM_CONFIG.jobs.find(j => j.id === jobTypeOrId || j.name === jobTypeOrId);
+      }
+      const jobName = job ? job.name : jobTypeOrId;
+      addLog('JOB', `[JOB EXECUTE] >>> ${jobName} <<<`, '#38bdf8');
+
+      if (job) {
+        switch (job.action) {
+          case 'cut-wait':
+            cutSystemWeb(job.targetSystem, true, job.waitDuration || 30);
+            break;
+          case 'cut-nowait':
+            cutSystemWeb(job.targetSystem, false);
+            break;
+          case 'integrate':
+            integrateSystemWeb(job.targetSystem);
+            break;
+          case 'cut-all-wait':
+            cutAllWeb(true, job.waitDuration || 30);
+            break;
+          case 'cut-all-nowait':
+            cutAllWeb(false);
+            break;
+          case 'integrate-all':
+            integrateAllWeb();
+            break;
+          default:
+            console.warn('Unknown job action:', job.action);
+        }
+      } else {
+        // フォールバック（従来の完全一致ジョブ名）
+        switch (jobTypeOrId) {
+          case 'WEB-A系切離-waitあり': cutSystemWeb('A', true, 30); break;
+          case 'WEB-A系切離-waitなし': cutSystemWeb('A', false); break;
+          case 'WEB-A系組込': integrateSystemWeb('A'); break;
+
+          case 'WEB-B系切離-waitあり': cutSystemWeb('B', true, 30); break;
+          case 'WEB-B系切離-waitなし': cutSystemWeb('B', false); break;
+          case 'WEB-B系組込': integrateSystemWeb('B'); break;
+
+          case 'WEB全台切離-waitあり': cutAllWeb(true, 30); break;
+          case 'WEB全台切離-waitなし': cutAllWeb(false); break;
+          case 'WEB全台組込': integrateAllWeb(); break;
+        }
+      }
+      checkSorryTrigger();
+      renderAllCardsFull();
+      renderRightPanel();
+    };
+
+    function cutSystemWeb(sys, hasWait, waitSec = 30) {
+      const targets = Object.values(State.nodes).filter(n => n.id.startsWith('web_') && n.system === sys).map(n => n.id);
+      targets.forEach(id => {
+        const node = State.nodes[id];
+        node.lbStatus = 'up/under-maintenance(manual)';
+
+        if (hasWait) {
+          node.drainTimer = waitSec;
+          addLog('WARN', `${node.name}: 切離(waitあり)投入。新規通信を拒否し、${waitSec}秒間既存通信の完了を維持します。`, '#f59e0b');
+
+          if (activeDrainTimers[id]) clearInterval(activeDrainTimers[id]);
+          activeDrainTimers[id] = setInterval(() => {
+            if (node.drainTimer > 0) {
+              node.drainTimer--;
+              updateDrainTimerBadge(id);
+              if (node.drainTimer === 0) {
+                clearInterval(activeDrainTimers[id]);
+                addLog('INFO', `${node.name}: ${waitSec}秒待機完了（Graceful Drain完了）。`, '#34d399');
+                renderAllCardsFull();
+              }
+            }
+          }, 1000);
+        } else {
+          if (activeDrainTimers[id]) clearInterval(activeDrainTimers[id]);
+          node.drainTimer = 0;
+          const aborted = node.activeConnections;
+          node.activeConnections = 0;
+          State.stats.errorCount += aborted;
+
+          for (let i = 0; i < packets.length; i++) {
+            if (packets[i].webNode && packets[i].webNode.id === id) {
+              packets[i].isError = true;
+              packets[i].errorCode = 504;
+              packets[i].isReturning = true;
+              packets[i].stayTimer = 0;
+              packets[i].currentHop = 0;
+              if (packets[i].clientRef) {
+                const clientCardId = 'card-client-' + packets[i].clientRef.id;
+                packets[i].returnHops = ['card-' + id, 'node-ext_lb', clientCardId];
+              }
+            }
+          }
+          State.sessionTable = State.sessionTable.filter(s => s.targetWeb !== node.name);
+          addLog('ERROR', `${node.name}: 切離(waitなし)投入！既存の通信を即座に一切拒否 (${aborted} conn強制切断・504/RST)。`, '#ef4444');
+        }
+      });
+
+      // その系にいたクライアントのセッションテーブルおよびセッション状態の即時クリア(waitなし)
+      if (!hasWait) {
+        State.clients.forEach(c => {
+          if (c.system === sys) {
+            c.sessionId = null;
+            c.hasSession = false;
+          }
+        });
+        renderClientCards();
+        syncSessionTable();
+      }
+    }
+
+    function integrateSystemWeb(sys) {
+      const targets = Object.values(State.nodes).filter(n => n.id.startsWith('web_') && n.system === sys).map(n => n.id);
+      targets.forEach(id => {
+        const node = State.nodes[id];
+        if (activeDrainTimers[id]) clearInterval(activeDrainTimers[id]);
+        node.drainTimer = 0;
+        node.lbStatus = 'up/active';
+        addLog('INFO', `${node.name}: 組込完了 (up/active)。External LBの均等負荷分散を再開。`, '#34d399');
+      });
+    }
+
+    function cutAllWeb(hasWait, waitSec = 30) {
+      cutSystemWeb('A', hasWait, waitSec);
+      cutSystemWeb('B', hasWait, waitSec);
+    }
+
+    function integrateAllWeb() {
+      integrateSystemWeb('A');
+      integrateSystemWeb('B');
+    }
+
+    window.resetToNormal = function() {
+      Object.keys(activeDrainTimers).forEach(k => clearInterval(activeDrainTimers[k]));
+      activeDrainTimers = {};
+
+      Object.values(State.nodes).forEach(node => {
+        if (node.id === 'web_sorry') {
+          node.lbStatus = 'up/standby';
+        } else {
+          node.lbStatus = 'up/active';
+        }
+        node.drainTimer = 0;
+        node.activeConnections = 0;
+        if (node.version) node.version = 'v1.0.0';
+      });
+
+      State.stats = { totalRequests: 0, successCount: 0, errorCount: 0, sorryCount: 0, systemACount: 0, systemBCount: 0 };
+      initClients();
+      addLog('INFO', '通常稼働（デフォルト状態）へ復帰しました。全ノード up/active。', '#38bdf8');
+      checkSorryTrigger();
+      renderAllCardsFull();
+      renderRightPanel();
+    };
+
+    // Sliders
+    window.onClientCountChange = function(val) {
+      const oldCount = State.clientCount;
+      const newCount = parseInt(val, 10);
+      State.clientCount = newCount;
+
+      // 1. クライアントを減らした場合 (離脱・切断):
+      if (newCount < oldCount) {
+        const removedClientIds = new Set();
+        for (let i = newCount; i < oldCount; i++) {
+          const c = State.clients[i];
+          if (c) {
+            removedClientIds.add(c.id);
+            // セッションおよびコネクションの完全破棄 (一度落としたら昔の通信は受け付けない)
+            c.sessionId = null;
+            c.targetWeb = null;
+            c.targetAp = null;
+            c.system = null;
+            c.hasSession = false;
+            c.wasError = false;
+            c.activeConns = 0;
+          }
+        }
+
+        // 離脱したクライアントに関するインフライトパケット（往路・復路問わず）を即時破棄！
+        // これにより、画面左上(0,0)に変な方向に飛んでいく現象と、復活時に古いレスポンスを受信してしまう不整合を完全に防止
+        for (let i = packets.length - 1; i >= 0; i--) {
+          const p = packets[i];
+          if (p.clientRef && removedClientIds.has(p.clientRef.id)) {
+            packets.splice(i, 1);
+          }
+        }
+
+        addLog('INFO', `🔌 [クライアント切断] ${oldCount}台 ➜ ${newCount}台に減少。離脱クライアントの進行中パケットおよびセッションを破棄しました。`, '#94a3b8');
+      }
+
+      // 2. クライアントを増やした場合 (新規接続):
+      if (newCount > oldCount) {
+        for (let i = oldCount; i < newCount; i++) {
+          const c = State.clients[i];
+          if (c) {
+            // 一度クライアントを落としたら、同じクライアントが上がってきても昔の通信やセッションは引き継がず新規接続(null)から開始
+            c.sessionId = null;
+            c.targetWeb = null;
+            c.targetAp = null;
+            c.system = null;
+            c.hasSession = false;
+            c.wasError = false;
+            c.activeConns = 0;
+          }
+        }
+        addLog('INFO', `👥 [クライアント増強] ${oldCount}台 ➜ ${newCount}台に増強。新規クライアントは最初のリクエスト時にAPからJSESSIONIDが採番されます。`, '#38bdf8');
+      }
+
+      const lbl = document.getElementById('label-client-count');
+      if (lbl) lbl.innerText = State.clientCount + '台';
+      const hdr = document.getElementById('client-count-header');
+      if (hdr) hdr.innerText = State.clientCount + '台';
+      renderClientCards();
+      syncSessionTable();
+      updateReqRateCalc();
+    };
+
+    window.onReqRateChange = function(val) {
+      State.reqPerClient = parseInt(val, 10);
+      updateReqRateCalc();
+    };
+
+    function updateReqRateCalc() {
+      const total = State.clientCount * State.reqPerClient;
+      State.clientReqRate = total;
+      const lbl = document.getElementById('label-req-rate');
+      if (lbl) {
+        lbl.innerText = `${State.reqPerClient} r/s (計${total})`;
+      }
+      setupPacketSpawner();
+    }
+
+    window.onStayChange = function(serverType, val) {
+      const v = parseFloat(val);
+      State.stayDuration[serverType] = v;
+      document.getElementById('label-stay-' + serverType).innerText = v.toFixed(1) + 's';
+      if (serverType === 'db') {
+        document.getElementById('db-stay-display').innerText = v.toFixed(1) + 's';
+      }
+      addLog('INFO', `⏱️ [滞留設定変更] ${serverType.toUpperCase()} 処理時間を ${v.toFixed(1)}秒 に設定`, '#f59e0b');
+      // Update stay label inside cards without rebuilding full DOM
+      updateStayLabelsInCards();
+    };
+
+    function updateStayLabelsInCards() {
+      ['web_01', 'web_02', 'web_03', 'web_04'].forEach(id => {
+        const el = document.getElementById('stay-val-' + id);
+        if (el) el.innerText = State.stayDuration.web + 's';
+      });
+      ['ap_01', 'ap_02', 'ap_03', 'ap_04', 'ap_05', 'ap_06'].forEach(id => {
+        const el = document.getElementById('stay-val-' + id);
+        if (el) el.innerText = State.stayDuration.ap + 's';
+      });
+    }
+
+    window.toggleRun = function() {
+      State.isRunning = !State.isRunning;
+      const btn = document.getElementById('btn-run');
+      btn.innerText = State.isRunning ? '一時停止' : '再開';
+      btn.className = State.isRunning ? 'btn btn-amber' : 'btn btn-emerald';
+      addLog('INFO', `Simulation ${State.isRunning ? 'Resumed' : 'Paused'}`);
+    };
+
+    window.setRightTab = function(tabName) {
+      State.activeRightTab = tabName;
+      ['jobs', 'sessions', 'explain'].forEach(t => {
+        const btn = document.getElementById('rtab-btn-' + t);
+        if (t === tabName) {
+          btn.style.color = '#38bdf8';
+          btn.style.borderBottom = '2px solid #38bdf8';
+          btn.style.background = 'rgba(15, 23, 42, 0.5)';
+        } else {
+          btn.style.color = '#94a3b8';
+          btn.style.borderBottom = 'none';
+          btn.style.background = 'transparent';
+        }
+      });
+      syncSessionTable();
+      renderRightPanel();
+    };
+
+    // =========================================================================
+    // DOM RENDERERS (Clean separation: structure built once/on-event, values updated live)
+    // =========================================================================
+
+    function buildNodeCardHTML(id) {
+      const node = State.nodes[id];
+      const el = document.getElementById('card-' + id);
+      if (!node || !el) return;
+
+      let cls = 'node-card ';
+      if (node.id === 'web_sorry') {
+        cls += (node.lbStatus === 'up/active') ? 'node-sorry-active' : 'node-standby';
+      } else if (node.lbStatus === 'down/-') {
+        cls += 'node-down';
+      } else if (node.lbStatus === 'up/under-maintenance(manual)') {
+        cls += 'node-maint';
+      } else if (node.lbStatus === 'up/standby') {
+        cls += 'node-standby';
+      } else {
+        cls += (node.system === 'A') ? 'node-up-a' : 'node-up-b';
+      }
+      el.className = cls;
+      if (node.id !== 'web_sorry') {
+        el.style.cursor = 'pointer';
+        el.title = `${node.name}: クリックで死活監視DOWN(down/-) / 復旧(up/active)を切り替え`;
+        el.onclick = () => toggleNodeHealth(id);
+      }
+
+      let badgeCls = 'badge-up';
+      if (node.lbStatus === 'up/under-maintenance(manual)') badgeCls = 'badge-maint';
+      if (node.lbStatus === 'down/-') badgeCls = 'badge-down';
+      if (node.lbStatus === 'up/standby') badgeCls = 'badge-standby';
+
+      const titleColor = (node.id === 'web_sorry') ? '#f59e0b' : (node.system === 'A' ? '#38bdf8' : '#c084fc');
+
+      let drainBadge = '';
+      if (node.drainTimer > 0) {
+        drainBadge = `<span id="drain-badge-${id}" style="background: #b45309; color: #fff; padding: 1px 4px; border-radius: 3px; font-size: 8px; font-weight: bold; animation: pulse-amber 1s infinite;">wait残り ${node.drainTimer}s</span>`;
+      } else {
+        drainBadge = `<span id="drain-badge-${id}"></span>`;
+      }
+
+      if (node.id === 'web_sorry') {
+        el.innerHTML = `
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <span style="font-weight: bold; font-family: monospace; color: ${titleColor}; font-size: 9.5px;">${node.name}</span>
+            <span id="lb-badge-${id}" class="badge ${badgeCls}">${node.lbStatus}</span>
+          </div>
+          <div style="margin-top: 3px; font-size: 8px; font-family: monospace; color: #94a3b8; display: flex; justify-content: space-between;">
+            <span>${node.ip}</span>
+            <span id="sorry-subtext" style="color: ${node.lbStatus === 'up/active' ? '#f59e0b' : '#64748b'}; font-weight: bold;">
+              ${node.lbStatus === 'up/active' ? '緊急稼働中 (503 Page返却)' : '待機中 (Web4台監視)'}
+            </span>
+          </div>
+        `;
+      } else if (node.id.startsWith('web_')) {
+        el.innerHTML = `
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <span style="font-weight: bold; font-family: monospace; color: ${titleColor}; font-size: 10px;">${node.name}</span>
+            <div style="display: flex; gap: 3px; align-items: center;">
+              ${drainBadge}
+              <span id="lb-badge-${id}" class="badge ${badgeCls}">${node.lbStatus}</span>
+            </div>
+          </div>
+          <div style="margin-top: 2px; display: flex; justify-content: space-between; font-size: 8.5px; font-family: monospace; color: #94a3b8;">
+            <span>Conn: <b id="conn-val-${id}" style="color: #fff; font-size: 9.5px;">${node.activeConnections}</b></span>
+            <span>滞留: <b id="stay-val-${id}" style="color: #38bdf8;">${State.stayDuration.web}s</b></span>
+          </div>
+          <div id="dots-${id}" style="min-height: 7px; margin-top: 2px;"></div>
+        `;
+      } else {
+        // AP
+        el.innerHTML = `
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <span style="font-weight: bold; font-family: monospace; color: ${titleColor}; font-size: 9.5px;">${node.name}</span>
+            <span id="lb-badge-${id}" class="badge ${badgeCls}">${node.lbStatus}</span>
+          </div>
+          <div style="margin-top: 2px; display: flex; justify-content: space-between; font-size: 8px; font-family: monospace; color: #94a3b8;">
+            <span>Conn: <b id="conn-val-${id}" style="color: #fff; font-size: 9px;">${node.activeConnections}</b></span>
+            <span>滞留: <b id="stay-val-${id}" style="color: #c084fc;">${State.stayDuration.ap}s</b></span>
+            <span>Ver: <b style="color: ${node.version === 'v2.0.0' ? '#34d399' : '#cbd5e1'};">${node.version}</b></span>
+          </div>
+          <div id="dots-${id}" style="min-height: 7px; margin-top: 2px;"></div>
+        `;
+      }
+    }
+
+    function updateDrainTimerBadge(id) {
+      const node = State.nodes[id];
+      const el = document.getElementById('drain-badge-' + id);
+      if (!el || !node) return;
+      if (node.drainTimer > 0) {
+        el.innerHTML = `<span style="background: #b45309; color: #fff; padding: 1px 4px; border-radius: 3px; font-size: 8px; font-weight: bold; animation: pulse-amber 1s infinite;">wait残り ${node.drainTimer}s</span>`;
+      } else {
+        el.innerHTML = '';
+      }
+    }
+
+    // Live update dynamic text values inside cards without rebuilding elements!
+    function updateLiveValuesInCards() {
+      Object.keys(State.nodes).forEach(id => {
+        const node = State.nodes[id];
+        const connEl = document.getElementById('conn-val-' + id);
+        if (connEl) connEl.innerText = node.activeConnections;
+
+        const cpuEl = document.getElementById('cpu-val-' + id);
+        if (cpuEl) {
+          cpuEl.innerText = node.cpu + '%';
+          cpuEl.style.color = node.cpu > 70 ? '#f59e0b' : '#cbd5e1';
+        }
+
+        // Dots container
+        const dotsEl = document.getElementById('dots-' + id);
+        if (dotsEl) {
+          const dotCount = Math.min(node.activeConnections, 8);
+          if (dotCount > 0) {
+            let html = '<div style="display:flex; align-items:center; gap:2px;">';
+            for (let k = 0; k < dotCount; k++) {
+              html += `<span style="display:inline-block; width:5px; height:5px; border-radius:50%; background:${node.system === 'A' ? '#38bdf8' : '#c084fc'}; box-shadow:0 0 4px ${node.system === 'A' ? '#38bdf8' : '#c084fc'}; animation: queue-glow 1s infinite ${k*0.1}s;"></span>`;
+            }
+            if (node.activeConnections > 8) {
+              html += `<span style="font-size:7px; color:#94a3b8; font-family:monospace;">+${node.activeConnections - 8}</span>`;
+            }
+            html += '</div>';
+            dotsEl.innerHTML = html;
+          } else {
+            dotsEl.innerHTML = '';
+          }
+        }
+      });
+    }
+
+    function renderAllCardsFull() {
+      Object.keys(State.nodes).forEach(id => buildNodeCardHTML(id));
+    }
+
+    function renderMetrics() {
+      const isReqZero = State.clientReqRate === 0;
+      const curRps = (State.isRunning && !isReqZero) ? Math.round(State.clientReqRate * State.simSpeed) : 0;
+      document.getElementById('metric-rps').innerText = curRps;
+
+      let totalInflight = 0;
+      Object.values(State.nodes).forEach(n => {
+        totalInflight += n.activeConnections;
+      });
+      document.getElementById('metric-inflight').innerText = totalInflight;
+
+      const dot = document.getElementById('traffic-dot');
+      if (curRps > 0) {
+        dot.style.background = '#10b981';
+        dot.style.boxShadow = '0 0 8px #10b981';
+      } else {
+        dot.style.background = '#64748b';
+        dot.style.boxShadow = 'none';
+      }
+
+      const sorryBadge = document.getElementById('metric-sorry-status');
+      if (State.nodes.web_sorry.lbStatus === 'up/active') {
+        sorryBadge.innerHTML = '<span style="color: #f59e0b; background: rgba(245,158,11,0.2); padding: 1px 5px; border-radius: 3px; border: 1px solid #f59e0b;">🚨 503 ACTIVE</span>';
+      } else {
+        sorryBadge.innerHTML = '<span style="color: #64748b;">STANDBY</span>';
+      }
+
+      document.getElementById('metric-success').innerText = State.stats.successCount;
+      const total = State.stats.successCount + State.stats.errorCount;
+      const errRate = (total === 0) ? '0.0' : ((State.stats.errorCount / total) * 100).toFixed(1);
+      const errEl = document.getElementById('metric-error');
+      errEl.innerText = `${State.stats.errorCount} err (${errRate}%)`;
+      errEl.style.color = (State.stats.errorCount > 0) ? '#f43f5e' : '#94a3b8';
+
+      const abTotal = State.stats.systemACount + State.stats.systemBCount;
+      const ratioA = (abTotal === 0) ? 50 : Math.round((State.stats.systemACount / abTotal) * 100);
+      const ratioB = 100 - ratioA;
+      document.getElementById('ratio-a').innerText = ratioA;
+      document.getElementById('ratio-b').innerText = ratioB;
+      document.getElementById('bar-a').style.width = ratioA + '%';
+      document.getElementById('bar-b').style.width = ratioB + '%';
+
+      const activeWebA = Object.values(State.nodes).filter(n => n.id.startsWith('web_') && n.system === 'A' && n.lbStatus === 'up/active').length;
+      const totalWebA = Object.values(State.nodes).filter(n => n.id.startsWith('web_') && n.system === 'A').length;
+      const activeWebB = Object.values(State.nodes).filter(n => n.id.startsWith('web_') && n.system === 'B' && n.lbStatus === 'up/active').length;
+      const totalWebB = Object.values(State.nodes).filter(n => n.id.startsWith('web_') && n.system === 'B').length;
+      const lbWebAEl = document.getElementById('lb-web-a-status');
+      lbWebAEl.innerText = `${activeWebA}/${totalWebA} ${activeWebA > 0 ? 'ACTIVE' : 'CUT'}`;
+      lbWebAEl.style.color = activeWebA > 0 ? '#34d399' : '#64748b';
+
+      const lbWebBEl = document.getElementById('lb-web-b-status');
+      lbWebBEl.innerText = `${activeWebB}/${totalWebB} ${activeWebB > 0 ? 'ACTIVE' : 'CUT'}`;
+      lbWebBEl.style.color = activeWebB > 0 ? '#34d399' : '#64748b';
+
+      const lbSorryEl = document.getElementById('lb-sorry-status');
+      lbSorryEl.innerText = State.nodes.web_sorry.lbStatus;
+      lbSorryEl.style.color = State.nodes.web_sorry.lbStatus === 'up/active' ? '#f59e0b' : '#64748b';
+
+      const activeApA = Object.values(State.nodes).filter(n => n.id.startsWith('ap_') && n.system === 'A' && n.lbStatus === 'up/active').length;
+      const totalApA = Object.values(State.nodes).filter(n => n.id.startsWith('ap_') && n.system === 'A').length;
+      const activeApB = Object.values(State.nodes).filter(n => n.id.startsWith('ap_') && n.system === 'B' && n.lbStatus === 'up/active').length;
+      const totalApB = Object.values(State.nodes).filter(n => n.id.startsWith('ap_') && n.system === 'B').length;
+      document.getElementById('vip-a-count').innerText = `${activeApA}/${totalApA}台`;
+      document.getElementById('vip-b-count').innerText = `${activeApB}/${totalApB}台`;
+
+      let dbConn = 0;
+      packets.forEach(p => {
+        if (p.isAtDb) dbConn++;
+      });
+      document.getElementById('db-conn').innerText = `${dbConn} conn`;
+
+      let clientConns = 0;
+      Object.values(State.nodes).forEach(n => {
+        if (n.id.startsWith('web_')) clientConns += n.activeConnections;
+      });
+      const clientTotalEl = document.getElementById('client-total-active');
+      if (clientTotalEl) clientTotalEl.innerText = clientConns;
+    }
+
+    // Render Right Panel ONCE on tab switch or job trigger - NEVER called in requestAnimationFrame!
+    function renderRightPanel() {
+      const container = document.getElementById('right-tab-content');
+      if (!container) return;
+
+      if (State.activeRightTab === 'jobs') {
+        const jobs = (window.SIM_CONFIG && window.SIM_CONFIG.jobs) || [];
+        let jobsHtml = '';
+
+        if (jobs.length > 0) {
+          const groups = {};
+          jobs.forEach(job => {
+            const grpKey = job.group || 'OTHER';
+            if (!groups[grpKey]) {
+              groups[grpKey] = {
+                title: job.groupTitle || `【${grpKey}系 ジョブ】`,
+                summary: job.targetSummary || '',
+                jobs: []
+              };
+            }
+            groups[grpKey].jobs.push(job);
+          });
+
+          jobsHtml = `
+            <div style="font-size: 11px; color: #94a3b8; line-height: 1.4;">
+              実務で実行される${jobs.length}種類のLB運用ジョブです。ボタンを押すと該当の縮退・組込処理がリアルタイムに投入されます。
+            </div>
+          `;
+
+          Object.keys(groups).forEach(grpKey => {
+            const grp = groups[grpKey];
+            let bg = 'rgba(15, 23, 42, 0.7)';
+            let border = '#334155';
+            let titleColor = '#cbd5e1';
+            if (grpKey === 'A') {
+              bg = 'rgba(8, 47, 73, 0.25)';
+              border = 'rgba(3, 105, 161, 0.4)';
+              titleColor = '#38bdf8';
+            } else if (grpKey === 'B') {
+              bg = 'rgba(59, 7, 100, 0.25)';
+              border = 'rgba(107, 33, 168, 0.4)';
+              titleColor = '#c084fc';
+            }
+
+            jobsHtml += `
+              <div style="background: ${bg}; border: 1px solid ${border}; border-radius: 6px; padding: 8px; display: flex; flex-direction: column; gap: 5px;">
+                <div style="font-size: 10px; font-weight: bold; color: ${titleColor}; font-family: monospace;">${grp.title} ${grp.summary ? `<span style="font-size: 9px; color: #94a3b8;">${grp.summary}</span>` : ''}</div>
+            `;
+
+            grp.jobs.forEach(job => {
+              let btnBg = '#1e293b';
+              let textColor = '#fde68a';
+              let borderColor = '#d97706';
+              let badgeBg = '#78350f';
+              let badgeColor = '#fde68a';
+
+              if (job.btnStyle === 'danger' || job.action.includes('nowait')) {
+                textColor = '#fca5a5';
+                borderColor = '#dc2626';
+                badgeBg = '#7f1d1d';
+                badgeColor = '#fca5a5';
+              } else if (job.btnStyle === 'success' || job.action.includes('integrate')) {
+                textColor = '#6ee7b7';
+                borderColor = '#059669';
+                badgeBg = '#064e3b';
+                badgeColor = '#6ee7b7';
+              }
+
+              jobsHtml += `
+                <button onclick="executeJob('${job.id}')" class="job-btn" style="background: ${btnBg}; color: ${textColor}; border-color: ${borderColor};">
+                  <span>${job.name}</span>
+                  <span style="font-size: 8px; background: ${badgeBg}; color: ${badgeColor}; padding: 1px 4px; border-radius: 3px;">${job.badge}</span>
+                </button>
+              `;
+            });
+
+            jobsHtml += `</div>`;
+          });
+        }
+
+        // 死活監視 障害シミュレーション (カオステスト)
+        jobsHtml += `
+          <div style="background: rgba(30, 41, 59, 0.4); border: 1px dashed #475569; border-radius: 6px; padding: 8px; display: flex; flex-direction: column; gap: 5px;">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <span style="font-size: 10px; font-weight: bold; color: #f43f5e; font-family: monospace;">【死活監視 障害テスト (down/-)】</span>
+              <span style="font-size: 8px; color: #94a3b8;">※カード個別クリックも可</span>
+            </div>
+            <div style="font-size: 9.5px; color: #94a3b8; line-height: 1.3;">
+              死活監視による障害検知と、WEB4台全ダウン時のSORRYサーバ (up/active) 自動昇格をテストできます。
+            </div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 5px; margin-top: 2px;">
+              <button onclick="failAllWeb()" class="btn" style="background: #881337; color: #fecdd3; border: 1px solid #e11d48; font-size: 9.5px; padding: 5px 3px;">
+                💥 WEB全台 down/- (SORRY発動)
+              </button>
+              <button onclick="recoverAllWeb()" class="btn" style="background: #064e3b; color: #a7f3d0; border: 1px solid #059669; font-size: 9.5px; padding: 5px 3px;">
+                ✅ WEB全台 復旧 (up/active)
+              </button>
+            </div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 5px;">
+              <button onclick="failAllAp()" class="btn" style="background: #4c0519; color: #fda4af; border: 1px solid #be123c; font-size: 9.5px; padding: 5px 3px;">
+                ⚡ AP 6台全滅 (503赤返却)
+              </button>
+              <button onclick="recoverAllAp()" class="btn" style="background: #064e3b; color: #a7f3d0; border: 1px solid #059669; font-size: 9.5px; padding: 5px 3px;">
+                ✅ AP 6台 復旧 (up/active)
+              </button>
+            </div>
+          </div>
+        `;
+        container.innerHTML = jobsHtml;
+      } else if (State.activeRightTab === 'sessions') {
+        container.innerHTML = `
+          <div style="font-size: 10.5px; color: #94a3b8; line-height: 1.4;">
+            <b>負荷分散装置 セッション管理テーブル</b><br>
+            <code>JSESSIONID</code> はAPサーバにて採番管理されます。WEB-AP（Internal LB）の通信も、そのJSESSIONIDを採番したAPサーバへ確実に固定ルーティング（Sticky Session）されます。
+          </div>
+
+          <div style="background: #080d1a; border: 1px solid #1e293b; border-radius: 6px; overflow: hidden; font-family: monospace; font-size: 9px;">
+            <div style="background: #0f172a; padding: 6px 8px; font-weight: bold; color: #cbd5e1; border-bottom: 1px solid #1e293b; display: grid; grid-template-columns: 0.7fr 1.3fr 0.8fr 0.8fr 0.4fr;">
+              <span>Client</span>
+              <span>JSESSIONID (AP採番)</span>
+              <span>Web</span>
+              <span>AP (Sticky)</span>
+              <span>Conn</span>
+            </div>
+            <div style="max-height: 220px; overflow-y: auto;">
+              ${State.sessionTable.map(s => `
+                <div style="padding: 5px 8px; border-bottom: 1px solid rgba(30,41,59,0.5); display: grid; grid-template-columns: 0.7fr 1.3fr 0.8fr 0.8fr 0.4fr; color: #cbd5e1; align-items: center;">
+                  <span style="font-weight: bold; color: #fff;">${s.clientName || 'Client'}</span>
+                  <span style="color: ${s.system === 'A' ? '#38bdf8' : '#c084fc'}; font-weight: bold; font-size: 8px;">${s.sessionId}</span>
+                  <span style="color: #cbd5e1;">${s.targetWeb}</span>
+                  <span style="color: ${s.system === 'A' ? '#38bdf8' : '#c084fc'}; font-weight: bold;">${s.targetAp || '-'}</span>
+                  <span style="color: #34d399; font-weight: bold;">${s.active}</span>
+                </div>
+              `).join('')}
+            </div>
+          </div>
+
+          <div style="background: rgba(15,23,42,0.8); border: 1px solid #1e293b; padding: 8px; border-radius: 5px; font-size: 10px; color: #cbd5e1; line-height: 1.4;">
+            💡 <b>実務ポイント</b>:
+            JSESSIONIDには採番したAP情報が含まれており（jvmRoute）、Internal LBは同一セッションのパケットを必ずその採番APへ配送します。採番APが障害やデプロイ等で落ちた場合は、別APへの片寄せ時に新IDが再採番されます。
+          </div>
+        `;
+      } else {
+        // Explain
+        container.innerHTML = `
+          <div style="font-size: 11px; color: #cbd5e1; line-height: 1.5; display: flex; flex-direction: column; gap: 8px;">
+            <div style="background: #080d1a; border: 1px solid #d97706; padding: 8px; border-radius: 5px;">
+              <b style="color: #f59e0b; font-size: 11.5px;">【waitあり】ジョブの挙動 (Graceful Drain)</b>
+              <p style="margin-top: 3px; font-size: 10.5px; color: #cbd5e1;">
+                ジョブ投入後、<strong>30秒間既存の通信は維持するが、新規通信については即座に受け付けません</strong>。<br>
+                Web/AP/DBでの処理時間（滞留秒数）を終えてレスポンスがクライアントに戻るまで安全に待機します。顧客エラー（5xx）ゼロでリリースするために必須の運用です。
+              </p>
+            </div>
+
+            <div style="background: #080d1a; border: 1px solid #dc2626; padding: 8px; border-radius: 5px;">
+              <b style="color: #ef4444; font-size: 11.5px;">【waitなし】ジョブの挙動 (Force Drop / Instant Kill)</b>
+              <p style="margin-top: 3px; font-size: 10.5px; color: #cbd5e1;">
+                ジョブ投入後、<strong>既存のコネクションの通信も一切拒否します</strong>。<br>
+                サーバ内で滞留中・SQL実行中だったリクエストは強制中断され、TCP RST または HTTP 504 Gateway Timeout が発生します。緊急障害対応時以外は推奨されません。
+              </p>
+            </div>
+
+            <div style="background: #080d1a; border: 1px solid #059669; padding: 8px; border-radius: 5px;">
+              <b style="color: #34d399; font-size: 11.5px;">【組込】ジョブの挙動 (Service-In)</b>
+              <p style="margin-top: 3px; font-size: 10.5px; color: #cbd5e1;">
+                サーバのヘルスチェック（死活監視）OKを確認後、負荷分散装置の重みを通常（100%）に戻し、新規リクエストの振り分け対象に復帰させます。
+              </p>
+            </div>
+
+            <div style="background: #080d1a; border: 1px solid #e11d48; padding: 8px; border-radius: 5px;">
+              <b style="color: #f43f5e; font-size: 11.5px;">【AP全台停止時の挙動】Internal LB (VIP) 503エラー返却</b>
+              <p style="margin-top: 3px; font-size: 10.5px; color: #cbd5e1;">
+                Webは生きているが配下のAPが全台停止（down/-）している場合、リクエストは途絶えることなく<strong>青色（行き）</strong>でWebを経由してInternal LB（VIP-A / VIP-B）まで到達します。<br>
+                Internal LBは振り分け先APが存在しないため、即座に<strong>HTTP 503 Service Unavailable</strong>を生成し、<strong>赤色（エラー返却）</strong>でWeb ➜ External LB ➜ Clientへ折り返し返却します。
+              </p>
+            </div>
+          </div>
+        `;
+      }
+    }
+
+    // =========================================================================
+    // HTML5 CANVAS PACKET ANIMATION: 往路(青) ➜ サーバ滞留(分散描画) ➜ 復路(緑)
+    // =========================================================================
+    let canvas = null;
+    let ctx = null;
+    let packetTimer = null;
+    const packets = [];
+
+    function getNodeCenter(id) {
+      const el = document.getElementById(id);
+      const container = document.getElementById('topology-container');
+      if (!el || !container) return { x: 0, y: 0 };
+      const elRect = el.getBoundingClientRect();
+      const contRect = container.getBoundingClientRect();
+      return {
+        x: elRect.left - contRect.left + elRect.width / 2,
+        y: elRect.top - contRect.top + elRect.height / 2
+      };
+    }
+
+    function drawCircuitLines() {
+      if (!ctx) return;
+
+      const drawPipe = (fromId, toId, strokeStyle, isDashed = false) => {
+        const p1 = getNodeCenter(fromId);
+        const p2 = getNodeCenter(toId);
+        if (p1.x === 0 || p2.x === 0) return;
+
+        ctx.beginPath();
+        ctx.setLineDash(isDashed ? [4, 4] : []);
+        ctx.strokeStyle = strokeStyle;
+        ctx.lineWidth = 1.5;
+
+        const midX = (p1.x + p2.x) / 2;
+        ctx.moveTo(p1.x, p1.y);
+        ctx.bezierCurveTo(midX, p1.y, midX, p2.y, p2.x, p2.y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      };
+
+      const isSorryActive = State.nodes.web_sorry.lbStatus === 'up/active';
+
+      // 1. Each Active Client -> Ext LB
+      for (let i = 1; i <= State.clientCount; i++) {
+        drawPipe('card-client-' + i, 'node-ext_lb', 'rgba(129, 140, 248, 0.3)');
+      }
+
+      // 2. Ext LB -> Web A & Web A -> VIP-A
+      const webANodes = Object.values(State.nodes).filter(n => n.id.startsWith('web_') && n.system === 'A');
+      webANodes.forEach(n => {
+        const active = n.lbStatus === 'up/active';
+        drawPipe('node-ext_lb', 'card-' + n.id, `rgba(56, 189, 248, ${active ? '0.35' : '0.08'})`, !active);
+        drawPipe('card-' + n.id, 'node-vip_a', `rgba(56, 189, 248, ${active ? '0.35' : '0.08'})`);
+      });
+
+      // 2. Ext LB -> SORRY
+      drawPipe('node-ext_lb', 'card-web_sorry', `rgba(245, 158, 11, ${isSorryActive ? '0.7' : '0.1'})`, !isSorryActive);
+
+      // 2. Ext LB -> Web B & Web B -> VIP-B
+      const webBNodes = Object.values(State.nodes).filter(n => n.id.startsWith('web_') && n.system === 'B');
+      webBNodes.forEach(n => {
+        const active = n.lbStatus === 'up/active';
+        drawPipe('node-ext_lb', 'card-' + n.id, `rgba(192, 132, 252, ${active ? '0.35' : '0.08'})`, !active);
+        drawPipe('card-' + n.id, 'node-vip_b', `rgba(192, 132, 252, ${active ? '0.35' : '0.08'})`);
+      });
+
+      // 4. VIP-A -> AP A & AP A -> DB
+      const apANodes = Object.values(State.nodes).filter(n => n.id.startsWith('ap_') && n.system === 'A');
+      apANodes.forEach(n => {
+        const active = n.lbStatus === 'up/active';
+        drawPipe('node-vip_a', 'card-' + n.id, `rgba(56, 189, 248, ${active ? '0.35' : '0.08'})`, !active);
+        drawPipe('card-' + n.id, 'node-db', `rgba(52, 211, 153, ${active ? '0.3' : '0.06'})`);
+      });
+
+      // 4. VIP-B -> AP B & AP B -> DB
+      const apBNodes = Object.values(State.nodes).filter(n => n.id.startsWith('ap_') && n.system === 'B');
+      apBNodes.forEach(n => {
+        const active = n.lbStatus === 'up/active';
+        drawPipe('node-vip_b', 'card-' + n.id, `rgba(192, 132, 252, ${active ? '0.35' : '0.08'})`, !active);
+        drawPipe('card-' + n.id, 'node-db', `rgba(52, 211, 153, ${active ? '0.3' : '0.06'})`);
+      });
+    }
+
+    let lastErrorLogTime = 0;
+    function logThrottleError(message, color = '#ef4444') {
+      const now = Date.now();
+      if (now - lastErrorLogTime > 2000) {
+        lastErrorLogTime = now;
+        addLog('ERROR', message, color);
+      }
+    }
+
+    function spawnPacket() {
+      if (!State.isRunning || State.clientReqRate === 0) return;
+
+      const activeClients = State.clients.slice(0, State.clientCount);
+      if (activeClients.length === 0) return;
+
+      // 1クライアントを選択してリクエスト送出
+      const client = activeClients[Math.floor(Math.random() * activeClients.length)];
+      client.activeConns++;
+
+      State.stats.totalRequests++;
+
+      const clientCardId = 'card-client-' + client.id;
+
+      // SORRY Server 稼働時 (行き: 青 / 帰り: 緑)
+      if (State.nodes.web_sorry.lbStatus === 'up/active') {
+        State.nodes.web_sorry.activeConnections++;
+        packets.push({
+          forwardHops: [clientCardId, 'node-ext_lb', 'card-web_sorry'],
+          returnHops: ['card-web_sorry', 'node-ext_lb', clientCardId],
+          isReturning: false,
+          currentHop: 0,
+          progress: 0,
+          speed: 0.04 * State.simSpeed,
+          system: 'SORRY',
+          webNode: State.nodes.web_sorry,
+          apNode: null,
+          stayTimer: 0,
+          stayNodeId: null,
+          orbitOffset: Math.random() * Math.PI * 2,
+          isAtDb: false,
+          isSorry: true,
+          isError: false,
+          errorCode: 200,
+          clientRef: client,
+          hasFailed: false,
+          burstParticles: []
+        });
+        return;
+      }
+
+      const candWebA = Object.values(State.nodes).filter(n => n.id.startsWith('web_') && n.system === 'A' && n.lbStatus === 'up/active');
+      const candWebB = Object.values(State.nodes).filter(n => n.id.startsWith('web_') && n.system === 'B' && n.lbStatus === 'up/active');
+      const candAll = [...candWebA, ...candWebB];
+
+      if (candAll.length === 0) {
+        // Web全台利用不能 (External LBで503返却: 行き青 -> Ext LBでエラー -> 帰り赤)
+        packets.push({
+          forwardHops: [clientCardId, 'node-ext_lb'],
+          returnHops: ['node-ext_lb', clientCardId],
+          isReturning: false,
+          currentHop: 0,
+          progress: 0,
+          speed: 0.035 * State.simSpeed,
+          system: 'EXT_LB_ERR',
+          webNode: null,
+          apNode: null,
+          stayTimer: 0,
+          stayNodeId: null,
+          orbitOffset: Math.random() * Math.PI * 2,
+          isAtDb: false,
+          isSorry: false,
+          isError: true,
+          errorCode: 503,
+          clientRef: client,
+          hasFailed: false,
+          burstParticles: []
+        });
+        return;
+      }
+
+      // Sticky Session判定:
+      // クライアントがJSESSIONIDを持っている場合:
+      let chosenWeb = null;
+
+      if (client.sessionId && client.targetWeb) {
+        const fixedWeb = Object.values(State.nodes).find(n => n.name === client.targetWeb || n.id === client.targetWeb || n.id === client.targetWeb.toLowerCase().replace('-', '_'));
+        if (fixedWeb) {
+          if (fixedWeb.lbStatus === 'up/active') {
+            // 1. 通常稼働: 固定先Webへ送信
+            chosenWeb = fixedWeb;
+          } else if (fixedWeb.lbStatus === 'up/under-maintenance(manual)' && fixedWeb.drainTimer > 0) {
+            // 2. waitあり切り離し中 (Graceful Drain中):
+            // ★「既に切り離し前からリクエストを受け付けていたJSESSIONIDについてはwaitの時間中は処理を受け付ける」
+            chosenWeb = fixedWeb;
+          } else {
+            // 3. wait満了後、またはwaitなし切離、またはdown/-:
+            // ★「up/under-maintenance(manual)になったタイミングで負荷分散装置でエラーが返る（そのタイミングでJSESSIONIDが破棄）で次のリクエストからフロント負荷分散装置でもう片系に振られる」
+            packets.push({
+              forwardHops: [clientCardId, 'node-ext_lb'],
+              returnHops: ['node-ext_lb', clientCardId],
+              isReturning: false,
+              currentHop: 0,
+              progress: 0,
+              speed: 0.035 * State.simSpeed,
+              system: fixedWeb.system,
+              webNode: fixedWeb,
+              apNode: null,
+              stayTimer: 0,
+              stayNodeId: null,
+              orbitOffset: Math.random() * Math.PI * 2,
+              isAtDb: false,
+              isSorry: false,
+              isError: true,
+              errorCode: 503,
+              clientRef: client,
+              hasFailed: false,
+              burstParticles: []
+            });
+            return;
+          }
+        }
+      }
+
+      // 新規セッション (sessionId === null) の場合: 稼働中(up/active)のWebへ新規分散（もう片系へ振り分け）
+      if (!chosenWeb) {
+        chosenWeb = candAll[Math.floor(Math.random() * candAll.length)];
+      }
+
+      const chosenSys = chosenWeb.system;
+
+      if (chosenSys === 'A') State.stats.systemACount++;
+      else State.stats.systemBCount++;
+
+      const vipId = chosenSys === 'A' ? 'node-vip_a' : 'node-vip_b';
+      const candAps = Object.values(State.nodes).filter(n => n.id.startsWith('ap_') && n.system === chosenSys && n.lbStatus === 'up/active');
+
+      // ★JSESSIONIDはAPサーバにて採番管理される。
+      // そのため、WEB-APのリクエストは負荷分散時にそのJSESSIONIDを採番したAPサーバに飛んでいく！
+      let chosenAp = null;
+
+      if (client.sessionId && client.targetAp) {
+        const fixedAp = Object.values(State.nodes).find(n => n.name === client.targetAp || n.id === client.targetAp || n.id === client.targetAp.toLowerCase().replace('-', '_'));
+        if (fixedAp && fixedAp.lbStatus === 'up/active') {
+          chosenAp = fixedAp; // ★採番したAPサーバへ確実にルーティング！
+        } else {
+          // 固定先APがダウン(down/-)または保守停止中: Internal LB (VIP) から503エラー(赤パケット)を返却！
+          packets.push({
+            forwardHops: [clientCardId, 'node-ext_lb', 'card-' + chosenWeb.id, vipId],
+            returnHops: [vipId, 'card-' + chosenWeb.id, 'node-ext_lb', clientCardId],
+            isReturning: false,
+            currentHop: 0,
+            progress: 0,
+            speed: 0.035 * State.simSpeed,
+            system: chosenSys,
+            webNode: chosenWeb,
+            apNode: null,
+            stayTimer: 0,
+            stayNodeId: null,
+            orbitOffset: Math.random() * Math.PI * 2,
+            isAtDb: false,
+            isSorry: false,
+            isError: true,
+            errorCode: 503,
+            clientRef: client,
+            hasFailed: false,
+            burstParticles: []
+          });
+          return;
+        }
+      }
+
+      // 新規セッション (sessionId === null) の場合は稼働中APから選定
+      if (!chosenAp) {
+        if (candAps.length > 0) {
+          chosenAp = candAps[Math.floor(Math.random() * candAps.length)];
+        }
+      }
+
+      // ★APサーバ全台停止時の挙動: リクエストは止まらず、Intra LB (VIP) で503エラーを赤で返却！
+      if (!chosenAp) {
+        packets.push({
+          forwardHops: [clientCardId, 'node-ext_lb', 'card-' + chosenWeb.id, vipId],
+          returnHops: [vipId, 'card-' + chosenWeb.id, 'node-ext_lb', clientCardId],
+          isReturning: false,
+          currentHop: 0,
+          progress: 0,
+          speed: 0.035 * State.simSpeed,
+          system: chosenSys,
+          webNode: chosenWeb,
+          apNode: null,
+          stayTimer: 0,
+          stayNodeId: null,
+          orbitOffset: Math.random() * Math.PI * 2,
+          isAtDb: false,
+          isSorry: false,
+          isError: true,
+          errorCode: 503,
+          clientRef: client,
+          hasFailed: false,
+          burstParticles: []
+        });
+        return;
+      }
+
+      const forwardHops = [
+        clientCardId,
+        'node-ext_lb',
+        'card-' + chosenWeb.id,
+        vipId,
+        'card-' + chosenAp.id,
+        'node-db'
+      ];
+
+      const returnHops = [
+        'node-db',
+        'card-' + chosenAp.id,
+        vipId,
+        'card-' + chosenWeb.id,
+        'node-ext_lb',
+        clientCardId
+      ];
+
+      packets.push({
+        forwardHops,
+        returnHops,
+        isReturning: false,
+        currentHop: 0,
+        progress: 0,
+        speed: 0.035 * State.simSpeed,
+        system: chosenSys,
+        webNode: chosenWeb,
+        apNode: chosenAp,
+        stayTimer: 0,
+        stayNodeId: null,
+        orbitOffset: Math.random() * Math.PI * 2,
+        isAtDb: false,
+        isSorry: false,
+        isError: false,
+        errorCode: 200,
+        clientRef: client,
+        hasFailed: false,
+        burstParticles: []
+      });
+    }
+
+    // Main Canvas Render Loop (DOES NOT TOUCH BUTTONS OR REBUILD INNERHTML!)
+    function renderCanvasLoop() {
+      if (!ctx || !canvas) return;
+
+      const container = document.getElementById('topology-container');
+      if (container && (canvas.width !== container.clientWidth || canvas.height !== container.clientHeight)) {
+        canvas.width = container.clientWidth;
+        canvas.height = container.clientHeight;
+      }
+
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      drawCircuitLines();
+
+      const connCounts = {};
+      Object.keys(State.nodes).forEach(k => connCounts[k] = 0);
+
+      const now = Date.now();
+
+      for (let i = packets.length - 1; i >= 0; i--) {
+        const p = packets[i];
+
+        if (p.hasFailed) {
+          for (let b = p.burstParticles.length - 1; b >= 0; b--) {
+            const bp = p.burstParticles[b];
+            bp.x += bp.vx;
+            bp.y += bp.vy;
+            bp.alpha -= 0.04;
+            ctx.beginPath();
+            ctx.arc(bp.x, bp.y, bp.radius, 0, Math.PI * 2);
+            ctx.fillStyle = `rgba(239, 68, 68, ${bp.alpha})`;
+            ctx.fill();
+            if (bp.alpha <= 0) p.burstParticles.splice(b, 1);
+          }
+          if (p.burstParticles.length === 0) packets.splice(i, 1);
+          continue;
+        }
+
+        if (p.webNode && connCounts[p.webNode.id] !== undefined) {
+          connCounts[p.webNode.id]++;
+        }
+        if (p.apNode && connCounts[p.apNode.id] !== undefined) {
+          connCounts[p.apNode.id]++;
+        }
+
+        if (p.stayTimer > 0) {
+          p.stayTimer -= (16 * State.simSpeed);
+
+          const pos = getNodeCenter(p.stayNodeId);
+
+          const orbitAngle = p.orbitOffset + (now / 450);
+          const orbitRadius = 14 + (Math.sin(now / 300 + p.orbitOffset) * 4);
+          const px = pos.x + Math.cos(orbitAngle) * orbitRadius;
+          const py = pos.y + Math.sin(orbitAngle) * orbitRadius;
+
+          const isReturn = p.isReturning;
+          let coreColor = '#38bdf8';
+          let glowColor = 'rgba(56, 189, 248, 0.45)';
+
+          if (isReturn) {
+            if (p.isError) {
+              coreColor = '#ef4444';
+              glowColor = 'rgba(239, 68, 68, 0.6)';
+            } else {
+              coreColor = '#10b981';
+              glowColor = 'rgba(16, 185, 129, 0.5)';
+            }
+          } else if (p.isAtDb) {
+            coreColor = '#34d399';
+            glowColor = 'rgba(52, 211, 153, 0.45)';
+          }
+
+          ctx.beginPath();
+          ctx.arc(px, py, 7, 0, Math.PI * 2);
+          ctx.fillStyle = glowColor;
+          ctx.fill();
+
+          ctx.beginPath();
+          ctx.arc(px, py, 3.5, 0, Math.PI * 2);
+          ctx.fillStyle = coreColor;
+          ctx.shadowBlur = 8;
+          ctx.shadowColor = coreColor;
+          ctx.fill();
+          ctx.shadowBlur = 0;
+
+          if (p.stayTimer <= 0) {
+            p.stayNodeId = null;
+            if (p.isAtDb) {
+              p.isAtDb = false;
+              p.isReturning = true;
+              p.currentHop = 0;
+            } else if (p.isSorry && !p.isReturning) {
+              p.isReturning = true;
+              p.currentHop = 0;
+            }
+          }
+          continue;
+        }
+
+        p.progress += p.speed;
+        if (p.progress >= 1.0) {
+          p.progress = 0;
+          p.currentHop++;
+
+          const activePath = p.isReturning ? p.returnHops : p.forwardHops;
+
+          if (!p.isReturning) {
+            if (p.currentHop === 2 && State.stayDuration.web > 0 && !p.isSorry && !p.isError) {
+              p.stayTimer = State.stayDuration.web * 1000;
+              p.stayNodeId = activePath[2];
+            } else if (p.currentHop === 4 && State.stayDuration.ap > 0 && !p.isSorry && !p.isError) {
+              p.stayTimer = State.stayDuration.ap * 1000;
+              p.stayNodeId = activePath[4];
+            } else if (p.isSorry && p.currentHop === 2) {
+              p.stayTimer = Math.max(100, (State.stayDuration.web || 0.3) * 1000);
+              p.stayNodeId = 'card-web_sorry';
+              continue;
+            } else if (p.isError && p.currentHop >= activePath.length - 1) {
+              // Intra LB (VIP) または Ext LB で 503 返却
+              p.isReturning = true;
+              p.currentHop = 0;
+              p.stayTimer = 150;
+              p.stayNodeId = activePath[activePath.length - 1];
+              const destName = (p.stayNodeId === 'node-vip_a') ? 'VIP-A' : (p.stayNodeId === 'node-vip_b' ? 'VIP-B' : 'Ext LB');
+              logThrottleError(`🚨 [503 Service Unavailable] Internal LB (${destName}): 配下のAP全台停止 (down/-) のため 503 エラーを返却（赤色パケット）`);
+              continue;
+            } else if (!p.isError && !p.isSorry && p.currentHop >= activePath.length - 1) {
+              p.isAtDb = true;
+              p.stayNodeId = 'node-db';
+              p.stayTimer = Math.max(50, State.stayDuration.db * 1000);
+              continue;
+            }
+          } else {
+            if (p.currentHop >= activePath.length - 1) {
+              const client = p.clientRef;
+              if (client) {
+                client.activeConns = Math.max(0, client.activeConns - 1);
+              }
+
+              if (p.isError) {
+                State.stats.errorCount++;
+                // ★エラーを受け取ったあと、既存JSESSIONIDを破棄！
+                // 「エラー時のみJSESSIONはなくなるが、それまでは１Clientで同じものを使う」
+                if (client && client.sessionId !== null) {
+                  const oldSess = client.sessionId;
+                  client.sessionId = null;
+                  client.targetAp = null;
+                  client.hasSession = false;
+                  client.wasError = true;
+                  addLog('WARN', `💥 [セッション破棄] ${client.name}: エラー(${p.errorCode || 503})受領により ${oldSess} を破棄。次回正常戻り時に新IDを再発行します。`, '#f43f5e');
+                  renderClientCards();
+                  syncSessionTable();
+                }
+              } else {
+                if (p.isSorry) {
+                  State.stats.sorryCount++;
+                } else {
+                  State.stats.successCount++;
+                }
+
+                // ★JSESSIONIDの付与条件:
+                // エラー時のみJSESSIONはなくなるが、それまでは１Clientで同じものを使う！
+                // したがって、新JSESSIONIDが採番されるのは client.sessionId === null (セッション未所持またはエラー後) の時だけ！
+                if (client && client.sessionId === null && !p.isSorry && p.apNode) {
+                  const newSys = p.system === 'A' ? 'A' : 'B';
+                  client.targetAp = p.apNode.name;
+                  client.sessionId = generateSessionId(newSys, p.apNode.name);
+                  client.hasSession = true;
+                  client.wasError = false;
+                  client.system = newSys;
+                  client.targetWeb = p.webNode ? p.webNode.name : (newSys === 'A' ? 'Web-02' : 'Web-01');
+
+                  addLog('INFO', `✨ [新JSESSIONID付与] ${client.name}: ${p.apNode.name}にて採番された ${client.sessionId} (固定: ${client.targetWeb} ➜ ${client.targetAp}) を受領！次回以降同一IDを維持します。`, '#34d399');
+                  renderClientCards();
+                  syncSessionTable();
+                }
+              }
+              packets.splice(i, 1);
+              continue;
+            }
+          }
+        }
+
+        const curPath = p.isReturning ? p.returnHops : p.forwardHops;
+        const fromId = curPath[p.currentHop];
+        const toId = curPath[p.currentHop + 1];
+        if (!fromId || !toId) {
+          packets.splice(i, 1);
+          continue;
+        }
+
+        // 宛先または出発元のDOM要素が存在しない場合（クライアント減少時など）、安全に即座破棄して(0,0)への迷走を防止
+        if (!document.getElementById(fromId) || !document.getElementById(toId)) {
+          packets.splice(i, 1);
+          continue;
+        }
+
+        const pFrom = getNodeCenter(fromId);
+        const pTo = getNodeCenter(toId);
+
+        const t = p.progress;
+        const midX1 = pFrom.x + (pTo.x - pFrom.x) * 0.5;
+        const midY1 = pFrom.y;
+        const midX2 = pFrom.x + (pTo.x - pFrom.x) * 0.5;
+        const midY2 = pTo.y;
+
+        const cx = Math.pow(1 - t, 3) * pFrom.x + 3 * Math.pow(1 - t, 2) * t * midX1 + 3 * (1 - t) * Math.pow(t, 2) * midX2 + Math.pow(t, 3) * pTo.x;
+        const cy = Math.pow(1 - t, 3) * pFrom.y + 3 * Math.pow(1 - t, 2) * t * midY1 + 3 * (1 - t) * Math.pow(t, 2) * midY2 + Math.pow(t, 3) * pTo.y;
+
+        // 行きは青 / 帰りは緑 / エラーは赤 (SORRYも行き青、帰り緑)
+        let coreColor = '#38bdf8';
+        let glowColor = 'rgba(56, 189, 248, 0.5)';
+
+        if (p.isReturning) {
+          if (p.isError) {
+            coreColor = '#ef4444';
+            glowColor = 'rgba(239, 68, 68, 0.65)';
+          } else {
+            coreColor = '#10b981';
+            glowColor = 'rgba(16, 185, 129, 0.55)';
+          }
+        }
+
+        ctx.beginPath();
+        ctx.arc(cx, cy, 6.5, 0, Math.PI * 2);
+        ctx.fillStyle = glowColor;
+        ctx.fill();
+
+        ctx.beginPath();
+        ctx.arc(cx, cy, 3.5, 0, Math.PI * 2);
+        ctx.fillStyle = coreColor;
+        ctx.shadowBlur = 8;
+        ctx.shadowColor = coreColor;
+        ctx.fill();
+        ctx.shadowBlur = 0;
+      }
+
+      Object.keys(State.nodes).forEach(k => {
+        const node = State.nodes[k];
+        node.activeConnections = connCounts[k] || 0;
+
+        if (node.lbStatus === 'up/active') {
+          const target = Math.min(95, 16 + node.activeConnections * 8);
+          node.cpu = Math.round(node.cpu * 0.9 + target * 0.1);
+        } else if (node.lbStatus === 'up/under-maintenance(manual)') {
+          node.cpu = Math.max(3, Math.round(node.cpu * 0.85));
+        } else {
+          node.cpu = 0;
+        }
+      });
+
+      // ONLY update live numeric values and metric headers - NEVER rebuild buttons!
+      updateLiveValuesInCards();
+      renderMetrics();
+
+      requestAnimationFrame(renderCanvasLoop);
+    }
+
+    function setupPacketSpawner() {
+      if (packetTimer) clearInterval(packetTimer);
+      if (State.clientReqRate === 0) return;
+      const intervalMs = Math.max(20, 1000 / (State.clientReqRate * State.simSpeed));
+      packetTimer = setInterval(() => {
+        spawnPacket();
+      }, intervalMs);
+    }
+
+    // Initialize
+    window.addEventListener('DOMContentLoaded', () => {
+      canvas = document.getElementById('packetCanvas');
+      if (canvas) ctx = canvas.getContext('2d');
+
+      addLog('INFO', 'LB死活監視＆9大運用ジョブコントローラー 初期化完了。', '#38bdf8');
+      addLog('INFO', 'デフォルト状態: 通常稼働 (全Web/AP up/active, SORRY up/standby)', '#34d399');
+
+      applyNetworkDevicesConfig();
+      initClients();
+      setupPacketSpawner();
+      renderAllCardsFull();
+      setRightTab('jobs');
+      renderMetrics();
+      requestAnimationFrame(renderCanvasLoop);
+    });
+  </script>
+</body>
+</html>

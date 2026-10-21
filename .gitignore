@@ -1,0 +1,13 @@
+# Python / Test artifacts
+__pycache__/
+*.pyc
+*.log
+
+# Temporary screenshots created during development/testing
+*.png
+
+# OS / Editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
