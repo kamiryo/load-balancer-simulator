@@ -2,6 +2,11 @@ import asyncio
 import sys
 from playwright.async_api import async_playwright
 
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8')
+if hasattr(sys.stderr, 'reconfigure'):
+    sys.stderr.reconfigure(encoding='utf-8')
+
 async def run_tests():
     errors = []
     async with async_playwright() as p:
@@ -281,6 +286,69 @@ async def run_tests():
         sorry_after = await page.locator("#lb-badge-web_sorry").inner_text()
         assert "up/standby" in sorry_after
         print("  SORRY returned to up/standby successfully.")
+
+        # 8. Test Manual Mode & Single Request on Client Click
+        print("\n--- Testing Manual Mode & Single Request Trigger on Client Click ---")
+        btn_mode = await page.wait_for_selector("#btn-traffic-mode", timeout=3000)
+        await btn_mode.click()
+        await page.wait_for_timeout(300)
+
+        mode_text = await btn_mode.inner_text()
+        print(f"  Traffic Mode after toggle: {mode_text}")
+        assert "手動" in mode_text, "Mode button must indicate manual mode"
+
+        is_manual = await page.evaluate("() => State.trafficMode === 'manual'")
+        assert is_manual, "State.trafficMode must be 'manual'"
+
+        # Wait for any in-flight packets to finish so network is idle
+        print("  Waiting for in-flight packets to clear in manual mode...")
+        cleared = False
+        idle_packets = 999
+        for _ in range(30):
+            await page.wait_for_timeout(300)
+            idle_packets = await page.evaluate("() => packets.length")
+            if idle_packets == 0:
+                cleared = True
+                break
+        print(f"  Network idle confirmed. Idle packets count: {idle_packets}")
+        assert cleared, "No new packets should be auto-spawned in manual mode"
+
+        # Click Client-01
+        print("  Clicking Client-01...")
+        await page.click("#card-client-1")
+        await page.wait_for_timeout(200)
+
+        # Check that exactly 1 packet from Client-01 was spawned
+        spawned = await page.evaluate("""() => {
+            return packets.map(p => ({
+                clientId: p.clientRef ? p.clientRef.id : null,
+                clientName: p.clientRef ? p.clientRef.name : null,
+                isReturning: p.isReturning
+            }));
+        }""")
+        print(f"  Packets after Client-01 click: {spawned}")
+        assert len(spawned) >= 1, "Clicking client card must spawn a packet"
+        assert spawned[0]['clientId'] == 1, f"Spawned packet must originate from Client-01, got {spawned[0]['clientName']}"
+        print("  Confirmed: Clicking Client-01 immediately sent 1 request from Client-01!")
+
+        # Click Client-02
+        print("  Clicking Client-02...")
+        await page.click("#card-client-2")
+        await page.wait_for_timeout(200)
+        spawned2 = await page.evaluate("""() => {
+            return packets.filter(p => p.clientRef && p.clientRef.id === 2).length;
+        }""")
+        assert spawned2 >= 1, "Clicking Client-02 must spawn packet for Client-02"
+        print("  Confirmed: Clicking Client-02 immediately sent 1 request from Client-02!")
+
+        # Toggle back to Auto mode
+        await btn_mode.click()
+        await page.wait_for_timeout(500)
+        is_auto = await page.evaluate("() => State.trafficMode === 'auto'")
+        assert is_auto, "State.trafficMode must return to 'auto'"
+        auto_count = await page.evaluate("() => packets.length")
+        print(f"  Switched back to auto mode. Auto traffic resumed: packets count = {auto_count}")
+        assert auto_count > 0, "Traffic auto-generation must resume in auto mode"
 
         if errors:
             print("\n[ERROR] Errors encountered:")
