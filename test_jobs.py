@@ -752,13 +752,13 @@ async def run_tests():
         assert len(sus_b) == 2, f"System B must remain exactly 2 clients, but got {len(sus_b)}: {sus_b}"
         print("  SUCCESS: Auto -> Manual -> Auto preserves exact 2-A / 2-B client balance with zero bias!")
 
-        # 13. Test AP Session Management & 40s Idle Timeout
+        # 13. Test AP Session Management & 40s Idle Timeout (Client retains ID until timeout detected on next request)
         print("\n--- Testing AP-side JSESSIONID Management & 40s Idle Timeout ---")
         ap_sessions = await page.evaluate("() => State.apSessions")
         print(f"  AP Session store state: { {k: len(v) for k, v in ap_sessions.items()} }")
         assert sum(len(v) for v in ap_sessions.values()) >= 4, "All active sessions must be tracked in State.apSessions"
 
-        # Simulate 40s idle timeout for Client-01
+        # Simulate 40s idle timeout for Client-01 on AP
         c1_sess = sustained_clients[0]['sessionId']
         c1_ap_id = sustained_clients[0]['targetAp'].lower().replace('-', '_')
         print(f"  Simulating 40s idle timeout for {sustained_clients[0]['name']} on {sustained_clients[0]['targetAp']} ({c1_sess})...")
@@ -767,11 +767,31 @@ async def run_tests():
                 State.apSessions['{c1_ap_id}']['{c1_sess}'].idleTimer = 1;
             }}
         }}""")
-        await page.wait_for_timeout(1400) # Wait for 1s interval to trigger expiry
-        expired_c1 = await page.evaluate(f"() => State.clients.find(c => c.id === {sustained_clients[0]['name'].split('-')[1]})")
-        print(f"  Client-01 session after 40s idle timeout: {expired_c1['sessionId']}")
-        assert expired_c1['sessionId'] is None, "Client-01 session must be cleared after 40s idle timeout"
-        print("  SUCCESS: AP-side 40s idle timeout verification passed!")
+        await page.wait_for_timeout(1400) # Wait for 1s interval to trigger AP-side expiry
+
+        # AP server must have deleted the session from its store
+        ap_has_session = await page.evaluate(f"() => !!(State.apSessions['{c1_ap_id}'] && State.apSessions['{c1_ap_id}']['{c1_sess}'])")
+        assert not ap_has_session, f"AP {c1_ap_id} must have discarded expired session {c1_sess} from store"
+
+        # BUT Client still retains the cookie until next request (real-world browser behavior)
+        c1_after_expiry = await page.evaluate(f"() => State.clients.find(c => c.id === {sustained_clients[0]['name'].split('-')[1]})")
+        print(f"  Client-01 session immediately after 40s timeout (before request): {c1_after_expiry['sessionId']}")
+        assert c1_after_expiry['sessionId'] == c1_sess, "Client must NOT clear its cookie until timeout is detected from server!"
+
+        # Now when Client-01 sends next request, AP detects missing session -> business error (purple packet) -> reissues new session
+        print("  Client-01 sends request after timeout; verifying AP detects missing session & reissues new JSESSIONID via purple packet...")
+        for _ in range(40):
+            await page.wait_for_timeout(200)
+            reissued = await page.evaluate(f"""() => {{
+                const c = State.clients.find(cl => cl.id === {sustained_clients[0]['name'].split('-')[1]});
+                return c.sessionId !== '{c1_sess}';
+            }}""")
+            if reissued:
+                break
+        c1_final = await page.evaluate(f"() => State.clients.find(c => c.id === {sustained_clients[0]['name'].split('-')[1]})")
+        print(f"  Client-01 new session after server timeout response: {c1_final['sessionId']}")
+        assert c1_final['sessionId'] != c1_sess, "Client-01 must have received new JSESSIONID upon server timeout response!"
+        print("  SUCCESS: AP-side 40s idle timeout & client cookie retention until server detection verified completely!")
 
         # 14. Test Session Mismatch across Different APs (Business Error / Purple Packet & Reissue)
         print("\n--- Testing Session Mismatch Handling (Different AP receives different JSESSIONID) ---")

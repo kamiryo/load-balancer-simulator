@@ -1006,11 +1006,14 @@
         .filter(c => c.sessionId !== null)
         .map(c => {
           let idleTimer = 40;
+          let isExpiredOnServer = false;
           if (State.apSessions && c.targetAp) {
             const apNode = Object.values(State.nodes).find(n => n.name === c.targetAp || n.id === c.targetAp);
             const apId = apNode ? apNode.id : c.targetAp.toLowerCase().replace('-', '_');
             if (State.apSessions[apId] && State.apSessions[apId][c.sessionId]) {
               idleTimer = State.apSessions[apId][c.sessionId].idleTimer;
+            } else {
+              isExpiredOnServer = true;
             }
           }
           return {
@@ -1021,7 +1024,8 @@
             system: c.system,
             active: c.activeConns,
             clientName: c.name,
-            idleTimer: idleTimer
+            idleTimer: idleTimer,
+            isExpiredOnServer: isExpiredOnServer
           };
         });
       if (State.activeRightTab === 'sessions') {
@@ -2005,8 +2009,8 @@
                   <span style="color: #cbd5e1;">${s.targetWeb}</span>
                   <span style="color: ${s.system === 'A' ? '#38bdf8' : '#c084fc'}; font-weight: bold;">${s.targetAp || '-'}</span>
                   <span style="color: #34d399; font-weight: bold;">${s.active}</span>
-                  <span style="color: ${s.idleTimer <= 10 ? '#ef4444' : (s.idleTimer <= 20 ? '#f59e0b' : '#34d399')}; font-weight: bold;">
-                    残り ${s.idleTimer}s
+                  <span style="color: ${s.isExpiredOnServer ? '#f59e0b' : (s.idleTimer <= 10 ? '#ef4444' : (s.idleTimer <= 20 ? '#f59e0b' : '#34d399'))}; font-weight: bold; font-size: 7.5px;">
+                    ${s.isExpiredOnServer ? 'サーバ破棄済(次回検知)' : `残り ${s.idleTimer}s`}
                   </span>
                 </div>
               `).join('')}
@@ -2854,17 +2858,10 @@
                 delete store[sessId];
                 hasChange = true;
 
-                // クライアント側でもセッション破棄
-                const targetClient = State.clients.find(c => c.sessionId === sessId);
-                if (targetClient) {
-                  targetClient.sessionId = null;
-                  targetClient.hasSession = false;
-                  targetClient.targetAp = null;
-                  targetClient.targetWeb = null;
-                  targetClient.wasError = false;
-                }
-
-                addLog('WARN', `⏱️ [APセッション破棄] ${apName}: 40秒間無通信のため ${clientName ? clientName + 'の' : ''}JSESSIONID (${sessId}) を破棄しました。次回は新規接続となります。`, '#fbbf24');
+                // ★ クライアント側はサーバからタイムアウトを受信・検知するまでCookie(sessionId)を保持し続ける（現実のブラウザ仕様）
+                // 次回クライアントがリクエストを送信してAPへ届いた際に、AP側で「セッションなし/タイムアウト」と検知され、
+                // 紫パケット（業務エラー）とともに新JSESSIONIDが再発行されます。
+                addLog('WARN', `⏱️ [APセッションタイムアウト] ${apName}: 40秒間無通信のため ${clientName ? clientName + 'の' : ''}JSESSIONID (${sessId}) をサーバ内部ストアから破棄しました（※クライアント側は次回リクエスト送信時にタイムアウトを検知します）。`, '#fbbf24');
               } else {
                 hasChange = true;
               }
