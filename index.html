@@ -914,8 +914,11 @@
         const webList = (sys === 'A') ? webA : webB;
         const apList = (sys === 'A') ? apA : apB;
 
-        const web = webList.length > 0 ? webList[(Math.floor((i - 1) / 2)) % webList.length].name : 'Web-01';
-        const ap = apList.length > 0 ? apList[(i - 1) % apList.length].name : 'AP-01';
+        const webNode = webList.length > 0 ? webList[(Math.floor((i - 1) / 2)) % webList.length] : null;
+        const web = webNode ? webNode.name : 'Web-01';
+        // WEBサーバ単位で固定されたAPサーバに紐づけ
+        const binding = (webNode && State.webApBindings) ? State.webApBindings[webNode.id] : null;
+        const ap = (binding && binding.targetApName) ? binding.targetApName : (apList.length > 0 ? apList[0].name : 'AP-01');
 
         // 初期表示中の4台のみ通常稼働セッションあり、5台目以降(5〜10)は新規追加用のため未所持(null)
         const isInitialActive = (i <= 4);

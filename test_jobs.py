@@ -128,7 +128,7 @@ async def run_tests():
         await page.wait_for_timeout(500)
         table_text = await page.locator("#right-tab-content").inner_text()
         print(f"  Session tab preview: {table_text[:140].strip()}...")
-        assert "AP (Sticky)" in table_text
+        assert "固定先AP" in table_text or "到達AP" in table_text
         assert "AP-0" in table_text
         # Switch back to jobs
         await page.click("#rtab-btn-jobs")
@@ -409,6 +409,58 @@ async def run_tests():
         assert visibility_in_auto['btnRunVisible'], "Pause button must be restored in Auto mode"
         assert visibility_in_auto['reqGroupVisible'], "Req rate slider must be restored in Auto mode"
         assert visibility_in_auto['manualGuideHidden'], "Manual guide must be hidden in Auto mode"
+
+        # 9. Verify WEB-AP Persistence & 30s Idle Timeout Reset Rules
+        print("\n--- Testing WEB-to-AP Persistence, Least-Conn / Lowest Node ID Rule & 30s Idle Timeout ---")
+        # Check initial bindings
+        bindings = await page.evaluate("() => State.webApBindings")
+        print(f"  Current Web-AP Bindings: {bindings}")
+        assert bindings['web_02']['targetApId'] == 'ap_02'
+        assert bindings['web_04']['targetApId'] == 'ap_04'
+        assert bindings['web_01']['targetApId'] == 'ap_01'
+        assert bindings['web_03']['targetApId'] == 'ap_03'
+
+        # Test timeout simulation: set idleTimer to 1s on web_02
+        await page.evaluate("""() => {
+            State.webApBindings.web_02.idleTimer = 1;
+        }""")
+        # Wait 1.5s for timer interval to decrement to 0 and reset binding
+        await page.wait_for_timeout(1500)
+        reset_binding = await page.evaluate("() => State.webApBindings.web_02")
+        print(f"  Binding after 1s timeout: {reset_binding}")
+        assert reset_binding['targetApId'] is None, "web_02 binding must be reset after timeout"
+        assert reset_binding['idleTimer'] == 0, "web_02 idleTimer must be 0 after timeout"
+
+        # Now test re-assignment with least connection rule (equal conn -> lowest node ID AP-02)
+        # Ensure AP-02 and AP-04 both have 0 activeConns
+        await page.evaluate("""() => {
+            State.nodes.ap_02.activeConnections = 0;
+            State.nodes.ap_04.activeConnections = 0;
+            const client = State.clients.find(c => c.targetWeb === 'Web-02') || State.clients[1];
+            client.targetWeb = 'Web-02';
+            sendRequestFromClient(client, false);
+        }""")
+        await page.wait_for_timeout(300)
+        new_binding = await page.evaluate("() => State.webApBindings.web_02")
+        print(f"  Re-assigned binding for Web-02 (least conn & lowest node rule): {new_binding}")
+        assert new_binding['targetApId'] == 'ap_02', "When conn is equal (0 vs 0), Web-02 must be assigned to lowest AP node (AP-02)"
+        assert new_binding['idleTimer'] == 30, "Idle timer must be re-initialized to 30s"
+
+        # Now test Least Connection rule when AP-02 has higher conn
+        await page.evaluate("""() => {
+            State.webApBindings.web_02.targetApId = null;
+            State.webApBindings.web_02.idleTimer = 0;
+            State.nodes.ap_02.activeConnections = 5;
+            State.nodes.ap_04.activeConnections = 1;
+            const client = State.clients.find(c => c.targetWeb === 'Web-02') || State.clients[1];
+            client.targetWeb = 'Web-02';
+            sendRequestFromClient(client, false);
+        }""")
+        await page.wait_for_timeout(300)
+        least_conn_binding = await page.evaluate("() => State.webApBindings.web_02")
+        print(f"  Re-assigned binding with AP-02 conn=5 vs AP-04 conn=1: {least_conn_binding}")
+        assert least_conn_binding['targetApId'] == 'ap_04', "Must be assigned to least-connection AP node (AP-04)"
+        print("  Confirmed: Least-connection priority and lowest-node fallback routing verified successfully!")
 
         if errors:
             print("\n[ERROR] Errors encountered:")
