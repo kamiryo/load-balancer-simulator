@@ -51,21 +51,25 @@ async def run_tests():
             ap_tag = c['targetAp'].replace('-', '')
             assert ap_tag in c['sessionId'], f"JSESSIONID {c['sessionId']} must contain AP identifier {ap_tag}"
 
-        # 3. Verify packets are strictly routed to the assigned targetAp
-        print("\n--- Verifying Web-AP Routing sends packets to the AP that generated the JSESSIONID ---")
+        # 3. Verify packets are strictly routed to the assigned system AP (A系 -> AP-02/04, B系 -> AP-01/03)
+        print("\n--- Verifying Web-AP Routing sends packets to the appropriate system AP according to Web-AP rules ---")
         await page.wait_for_timeout(1500)
         routed_packets = await page.evaluate("""() => {
             return packets.filter(p => p.apNode && p.clientRef && p.clientRef.sessionId).map(p => ({
                 clientName: p.clientRef.name,
-                expectedAp: p.clientRef.targetAp,
-                actualAp: p.apNode.name
+                system: p.system,
+                actualAp: p.apNode.name,
+                webName: p.webNode ? p.webNode.name : null
             }));
         }""")
         print(f"  Checked {len(routed_packets)} in-flight packets with active sessions:")
         assert len(routed_packets) > 0, "There should be in-flight packets routed to AP"
         for p_info in routed_packets[:8]:
-            print(f"    {p_info['clientName']}: expected {p_info['expectedAp']} == actual {p_info['actualAp']}")
-            assert p_info['expectedAp'] == p_info['actualAp'], f"Packet from {p_info['clientName']} must route to {p_info['expectedAp']}, but went to {p_info['actualAp']}"
+            print(f"    {p_info['clientName']}: system {p_info['system']} via {p_info['webName']} -> routed to {p_info['actualAp']}")
+            if p_info['system'] == 'A':
+                assert p_info['actualAp'] in ['AP-02', 'AP-04'], f"System A packet must route to AP-02 or AP-04, but got {p_info['actualAp']}"
+            else:
+                assert p_info['actualAp'] in ['AP-01', 'AP-03'], f"System B packet must route to AP-01 or AP-03, but got {p_info['actualAp']}"
 
         # 3-B. Verify that JSESSIONID remains completely unchanged across multiple normal requests
         print("\n--- Verifying JSESSIONID is NOT updated per request (kept static until error) ---")
@@ -452,16 +456,34 @@ async def run_tests():
         await page.evaluate("""() => {
             State.webApBindings.web_02.targetApId = null;
             State.webApBindings.web_02.idleTimer = 0;
-            State.nodes.ap_02.activeConnections = 5;
-            State.nodes.ap_04.activeConnections = 1;
+            // Inject in-flight packet actively processing on AP-02
+            packets.push({
+                forwardHops: ['card-client-1', 'node-ext_lb', 'card-web_02', 'node-vip_a', 'card-ap_02', 'node-db'],
+                returnHops: ['node-db', 'card-ap_02', 'node-vip_a', 'card-web_02', 'node-ext_lb', 'card-client-1'],
+                isReturning: false,
+                currentHop: 4,
+                stayTimer: 5000,
+                stayNodeId: 'card-ap_02',
+                webNode: State.nodes.web_02,
+                apNode: State.nodes.ap_02,
+                system: 'A',
+                speed: 0.035,
+                progress: 0,
+                burstParticles: []
+            });
             const client = State.clients.find(c => c.targetWeb === 'Web-02') || State.clients[1];
             client.sessionId = 'TEST-SESS-01';
             client.targetWeb = 'Web-02';
             sendRequestFromClient(client, false);
         }""")
-        await page.wait_for_timeout(300)
-        least_conn_binding = await page.evaluate("() => State.webApBindings.web_02")
-        print(f"  Re-assigned binding with AP-02 conn=5 vs AP-04 conn=1: {least_conn_binding}")
+        least_conn_binding = None
+        for _ in range(30):
+            await page.wait_for_timeout(100)
+            b = await page.evaluate("() => State.webApBindings.web_02")
+            if b and b['targetApId']:
+                least_conn_binding = b
+                break
+        print(f"  Re-assigned binding with AP-02 busy vs AP-04 calm: {least_conn_binding}")
         assert least_conn_binding['targetApId'] == 'ap_04', "Must be assigned to least-connection AP node (AP-04)"
         print("  Confirmed: Least-connection priority and lowest-node fallback routing verified successfully!")
 
@@ -599,41 +621,64 @@ async def run_tests():
             });
         }""")
 
-        # 11-1. Client-01 (B-sys): When B-webs conn equal (0 vs 0), request must route to lowest node (Web-01)
-        await page.evaluate("() => sendManualClientRequest(1)")
-        p_calm1 = await page.evaluate("() => packets[packets.length - 1] ? packets[packets.length - 1].webNode.name : null")
-        print(f"  Client-01 (B-sys) calm conn=0 -> Assigned to: {p_calm1}")
-        assert p_calm1 == 'Web-01', "From calm state (equal conn=0), Client-01 must route to lowest B-node Web-01"
+        async def get_latest_routed_web():
+            for _ in range(30):
+                await page.wait_for_timeout(50)
+                name = await page.evaluate("() => packets[packets.length - 1] && packets[packets.length - 1].webNode ? packets[packets.length - 1].webNode.name : null")
+                if name:
+                    return name
+            return None
 
-        # 11-2. Client-01 (B-sys): When Web-01 conn=1 vs Web-03 conn=0, request must route to least-conn Web-03
+        # 11-1. When all 4 webs have equal conn (0 vs 0 vs 0 vs 0), request must route to lowest node ID (Web-01)
         await page.evaluate("""() => {
-            State.nodes.web_01.activeConnections = 1;
-            State.nodes.web_03.activeConnections = 0;
+            packets.length = 0;
             sendManualClientRequest(1);
         }""")
-        p_calm2 = await page.evaluate("() => packets[packets.length - 1] ? packets[packets.length - 1].webNode.name : null")
-        print(f"  Client-01 (B-sys) Web-01 conn=1 vs Web-03 conn=0 -> Assigned to: {p_calm2}")
-        assert p_calm2 == 'Web-03', "When Web-01 is busy, Client-01 must route to least-conn Web-03"
+        p_calm1 = await get_latest_routed_web()
+        print(f"  All webs conn=0 -> Assigned to: {p_calm1}")
+        assert p_calm1 == 'Web-01', "From calm state (equal conn=0), request must be assigned to lowest node Web-01"
 
-        # 11-3. Client-02 (A-sys): When A-webs conn equal (0 vs 0), request must route to lowest node (Web-02)
+        # 11-2. When Web-01 conn=1, Web-02/03/04 conn=0, request must route to Web-02
         await page.evaluate("""() => {
-            State.nodes.web_02.activeConnections = 0;
-            State.nodes.web_04.activeConnections = 0;
-            sendManualClientRequest(2);
+            packets.length = 0;
+            packets.push({
+                forwardHops: ['card-client-1', 'node-ext_lb', 'card-web_01', 'node-vip_b', 'card-ap_01', 'node-db'],
+                returnHops: ['node-db', 'card-ap_01', 'node-vip_b', 'card-web_01', 'node-ext_lb', 'card-client-1'],
+                isReturning: false, currentHop: 2, stayTimer: 5000, stayNodeId: 'card-web_01',
+                webNode: State.nodes.web_01, apNode: State.nodes.ap_01, system: 'B', speed: 0.035, progress: 0, burstParticles: []
+            });
+            sendManualClientRequest(1);
         }""")
-        p_calm3 = await page.evaluate("() => packets[packets.length - 1] ? packets[packets.length - 1].webNode.name : null")
-        print(f"  Client-02 (A-sys) calm conn=0 -> Assigned to: {p_calm3}")
-        assert p_calm3 == 'Web-02', "From calm state (equal conn=0), Client-02 must route to lowest A-node Web-02"
+        p_calm2 = await get_latest_routed_web()
+        print(f"  Web-01 conn=1 vs Web-02..04 conn=0 -> Assigned to: {p_calm2}")
+        assert p_calm2 == 'Web-02', "When Web-01 is busy, request must be assigned to next lowest node Web-02"
 
-        # 11-4. Client-02 (A-sys): When Web-02 conn=1 vs Web-04 conn=0, request must route to least-conn Web-04
+        # 11-3. When Web-01 conn=1, Web-02 conn=1, Web-03/04 conn=0, request must route to Web-03
         await page.evaluate("""() => {
-            State.nodes.web_02.activeConnections = 1;
-            State.nodes.web_04.activeConnections = 0;
-            sendManualClientRequest(2);
+            packets.length = 0;
+            packets.push(
+                { forwardHops: ['card-client-1', 'node-ext_lb', 'card-web_01', 'node-vip_b', 'card-ap_01', 'node-db'], returnHops: [], isReturning: false, currentHop: 2, stayTimer: 5000, stayNodeId: 'card-web_01', webNode: State.nodes.web_01, apNode: State.nodes.ap_01, system: 'B', speed: 0.035, progress: 0, burstParticles: [] },
+                { forwardHops: ['card-client-2', 'node-ext_lb', 'card-web_02', 'node-vip_a', 'card-ap_02', 'node-db'], returnHops: [], isReturning: false, currentHop: 2, stayTimer: 5000, stayNodeId: 'card-web_02', webNode: State.nodes.web_02, apNode: State.nodes.ap_02, system: 'A', speed: 0.035, progress: 0, burstParticles: [] }
+            );
+            sendManualClientRequest(1);
         }""")
-        p_calm4 = await page.evaluate("() => packets[packets.length - 1] ? packets[packets.length - 1].webNode.name : null")
-        print(f"  Client-02 (A-sys) Web-02 conn=1 vs Web-04 conn=0 -> Assigned to: {p_calm4}")
-        assert p_calm4 == 'Web-04', "When Web-02 is busy, Client-02 must route to least-conn Web-04"
+        p_calm3 = await get_latest_routed_web()
+        print(f"  Web-01,02 conn=1 vs Web-03,04 conn=0 -> Assigned to: {p_calm3}")
+        assert p_calm3 == 'Web-03', "When Web-01,02 are busy, request must be assigned to next lowest node Web-03"
+
+        # 11-4. When Web-01,02,03 conn=1, Web-04 conn=0, request must route to Web-04
+        await page.evaluate("""() => {
+            packets.length = 0;
+            packets.push(
+                { forwardHops: ['card-client-1', 'node-ext_lb', 'card-web_01', 'node-vip_b', 'card-ap_01', 'node-db'], returnHops: [], isReturning: false, currentHop: 2, stayTimer: 5000, stayNodeId: 'card-web_01', webNode: State.nodes.web_01, apNode: State.nodes.ap_01, system: 'B', speed: 0.035, progress: 0, burstParticles: [] },
+                { forwardHops: ['card-client-2', 'node-ext_lb', 'card-web_02', 'node-vip_a', 'card-ap_02', 'node-db'], returnHops: [], isReturning: false, currentHop: 2, stayTimer: 5000, stayNodeId: 'card-web_02', webNode: State.nodes.web_02, apNode: State.nodes.ap_02, system: 'A', speed: 0.035, progress: 0, burstParticles: [] },
+                { forwardHops: ['card-client-3', 'node-ext_lb', 'card-web_03', 'node-vip_b', 'card-ap_03', 'node-db'], returnHops: [], isReturning: false, currentHop: 2, stayTimer: 5000, stayNodeId: 'card-web_03', webNode: State.nodes.web_03, apNode: State.nodes.ap_03, system: 'B', speed: 0.035, progress: 0, burstParticles: [] }
+            );
+            sendManualClientRequest(1);
+        }""")
+        p_calm4 = await get_latest_routed_web()
+        print(f"  Web-01..03 conn=1 vs Web-04 conn=0 -> Assigned to: {p_calm4}")
+        assert p_calm4 == 'Web-04', "When Web-01,02,03 are busy, request must be assigned to Web-04"
         print("  SUCCESS: Client-to-Web Least-Connection and Lowest-Node-ID routing verified completely!")
 
         # 12. Verify Auto -> Manual -> Auto System Balance (Must stay strictly 2 for System A, 2 for System B)
@@ -656,40 +701,30 @@ async def run_tests():
         mode2 = await page.evaluate("() => State.trafficMode")
         assert mode2 == 'auto', f"Expected auto mode, got {mode2}"
 
-        # Step D: Check 4 clients balance immediately upon returning to auto
-        clients_balanced = await page.evaluate("""() => {
-            return State.clients.slice(0, 4).map(c => ({
-                name: c.name,
-                system: c.system,
-                targetWeb: c.targetWeb,
-                targetAp: c.targetAp,
-                sessionId: c.sessionId
-            }));
-        }""")
-        print(f"  Clients upon returning to Auto: {clients_balanced}")
-        sys_a_clients = [c for c in clients_balanced if c['system'] == 'A']
-        sys_b_clients = [c for c in clients_balanced if c['system'] == 'B']
-        print(f"  System A clients ({len(sys_a_clients)}): {[c['name'] for c in sys_a_clients]}")
-        print(f"  System B clients ({len(sys_b_clients)}): {[c['name'] for c in sys_b_clients]}")
-        assert len(sys_a_clients) == 2, f"System A must have exactly 2 clients, but got {len(sys_a_clients)}: {sys_a_clients}"
-        assert len(sys_b_clients) == 2, f"System B must have exactly 2 clients, but got {len(sys_b_clients)}: {sys_b_clients}"
+        # Step D: Let auto traffic run until clients complete initial roundtrip & acquire sessions
+        print("  Running auto traffic to verify sustained system balance (2 for A, 2 for B)...")
+        sustained_clients = []
+        for sec in range(1, 14):
+            await page.wait_for_timeout(1000)
+            sustained_clients = await page.evaluate("""() => {
+                return State.clients.slice(0, 4).map(c => ({
+                    name: c.name,
+                    system: c.system,
+                    targetWeb: c.targetWeb,
+                    targetAp: c.targetAp,
+                    sessionId: c.sessionId
+                }));
+            }""")
+            if all(c['sessionId'] is not None for c in sustained_clients):
+                print(f"  All 4 clients completed roundtrip at sec {sec}!")
+                break
 
-        # Step E: Let auto traffic run for 2.5s and verify it remains 100% balanced (2 for A, 2 for B)
-        print("  Running auto traffic for 2.5s to verify sustained system balance...")
-        await page.wait_for_timeout(2500)
-        sustained_clients = await page.evaluate("""() => {
-            return State.clients.slice(0, 4).map(c => ({
-                name: c.name,
-                system: c.system,
-                targetWeb: c.targetWeb,
-                targetAp: c.targetAp
-            }));
-        }""")
         sus_a = [c for c in sustained_clients if c['system'] == 'A']
         sus_b = [c for c in sustained_clients if c['system'] == 'B']
+        print(f"  Sustained Clients: {sustained_clients}")
         print(f"  Sustained: System A count={len(sus_a)}, System B count={len(sus_b)}")
-        assert len(sus_a) == 2, f"System A must remain exactly 2 clients, but got {len(sus_a)}"
-        assert len(sus_b) == 2, f"System B must remain exactly 2 clients, but got {len(sus_b)}"
+        assert len(sus_a) == 2, f"System A must remain exactly 2 clients, but got {len(sus_a)}: {sus_a}"
+        assert len(sus_b) == 2, f"System B must remain exactly 2 clients, but got {len(sus_b)}: {sus_b}"
         print("  SUCCESS: Auto -> Manual -> Auto preserves exact 2-A / 2-B client balance with zero bias!")
 
         if errors:

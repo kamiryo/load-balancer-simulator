@@ -1468,12 +1468,11 @@
           color: '#f59e0b'
         }, true);
       } else {
-        // 自動モードへの復帰時: 通常稼働（各系2台、初期セッション構成）を初期状態へ復元
         resetAllSimulationState('auto', {
           level: 'INFO',
-          message: '🔄 【自動生成モード】に切り替えました。初期セッション構成（A系2台・B系2台）および負荷分散状態を初期化し、自動リクエストを開始します。',
+          message: '🔄 【自動生成モード】に切り替えました。パケット・セッション・負荷分散状態を初期化し、自動リクエストを開始します。',
           color: '#38bdf8'
-        }, false);
+        }, true);
       }
     };
 
@@ -2126,14 +2125,16 @@
       }
     }
 
+    let clientSpawnIndex = 0;
     function spawnPacket() {
       if (!State.isRunning || State.trafficMode === 'manual' || State.clientReqRate === 0) return;
 
       const activeClients = State.clients.slice(0, State.clientCount);
       if (activeClients.length === 0) return;
 
-      // 1クライアントを選択してリクエスト送出
-      const client = activeClients[Math.floor(Math.random() * activeClients.length)];
+      // 各クライアントから公平に順繰り(ラウンドロビン)にリクエストを送出
+      const client = activeClients[clientSpawnIndex % activeClients.length];
+      clientSpawnIndex++;
       sendRequestFromClient(client, false);
     }
 
@@ -2152,29 +2153,45 @@
 
       const clientCardId = 'card-client-' + client.id;
 
+      // ★ 現実のWEBサービスと同じ動作:
+      // クライアント発射時点では代表VIP (External LB) に向けてパケットを送出。
+      // 転送先Webは External LB 到着時に動的決定し、転送先Apは Internal LB 到着時に動的決定します。
+      packets.push({
+        forwardHops: [clientCardId, 'node-ext_lb'],
+        returnHops: ['node-ext_lb', clientCardId],
+        isReturning: false,
+        currentHop: 0,
+        progress: 0,
+        speed: 0.035 * State.simSpeed,
+        system: null,
+        webNode: null,
+        apNode: null,
+        stayTimer: 0,
+        stayNodeId: null,
+        orbitOffset: Math.random() * Math.PI * 2,
+        isAtDb: false,
+        isSorry: false,
+        isError: false,
+        errorCode: 200,
+        clientRef: client,
+        hasFailed: false,
+        burstParticles: []
+      });
+    }
+
+    // ★ External LB 到着時の動的Web決定処理
+    function handleExtLbArrival(p) {
+      const client = p.clientRef;
+      const clientCardId = client ? ('card-client-' + client.id) : p.forwardHops[0];
+
       // SORRY Server 稼働時 (行き: 青 / 帰り: 緑)
       if (State.nodes.web_sorry.lbStatus === 'up/active') {
-        packets.push({
-          forwardHops: [clientCardId, 'node-ext_lb', 'card-web_sorry'],
-          returnHops: ['card-web_sorry', 'node-ext_lb', clientCardId],
-          isReturning: false,
-          currentHop: 0,
-          progress: 0,
-          speed: 0.04 * State.simSpeed,
-          system: 'SORRY',
-          webNode: State.nodes.web_sorry,
-          apNode: null,
-          stayTimer: 0,
-          stayNodeId: null,
-          orbitOffset: Math.random() * Math.PI * 2,
-          isAtDb: false,
-          isSorry: true,
-          isError: false,
-          errorCode: 200,
-          clientRef: client,
-          hasFailed: false,
-          burstParticles: []
-        });
+        p.isSorry = true;
+        p.isError = false;
+        p.system = 'SORRY';
+        p.webNode = State.nodes.web_sorry;
+        p.forwardHops.push('card-web_sorry');
+        p.returnHops = ['card-web_sorry', 'node-ext_lb', clientCardId];
         return;
       }
 
@@ -2184,27 +2201,15 @@
 
       if (candAll.length === 0) {
         // Web全台利用不能 (External LBで503返却: 行き青 -> Ext LBでエラー -> 帰り赤)
-        packets.push({
-          forwardHops: [clientCardId, 'node-ext_lb'],
-          returnHops: ['node-ext_lb', clientCardId],
-          isReturning: false,
-          currentHop: 0,
-          progress: 0,
-          speed: 0.035 * State.simSpeed,
-          system: 'EXT_LB_ERR',
-          webNode: null,
-          apNode: null,
-          stayTimer: 0,
-          stayNodeId: null,
-          orbitOffset: Math.random() * Math.PI * 2,
-          isAtDb: false,
-          isSorry: false,
-          isError: true,
-          errorCode: 503,
-          clientRef: client,
-          hasFailed: false,
-          burstParticles: []
-        });
+        p.isError = true;
+        p.errorCode = 503;
+        p.system = 'EXT_LB_ERR';
+        p.isReturning = true;
+        p.currentHop = 0;
+        p.stayTimer = 150;
+        p.stayNodeId = 'node-ext_lb';
+        p.returnHops = ['node-ext_lb', clientCardId];
+        logThrottleError('🚨 [503 Service Unavailable] External LB: 配下のWEB全台停止 (down/-) のため 503 エラーを返却（赤色パケット）');
         return;
       }
 
@@ -2212,7 +2217,7 @@
       // クライアントがJSESSIONIDを持っている場合:
       let chosenWeb = null;
 
-      if (client.sessionId && client.targetWeb) {
+      if (client && client.sessionId && client.targetWeb) {
         const fixedWeb = Object.values(State.nodes).find(n => n.name === client.targetWeb || n.id === client.targetWeb || n.id === client.targetWeb.toLowerCase().replace('-', '_'));
         if (fixedWeb) {
           if (fixedWeb.lbStatus === 'up/active') {
@@ -2225,41 +2230,24 @@
           } else {
             // 3. wait満了後、またはwaitなし切離、またはdown/-:
             // ★「up/under-maintenance(manual)になったタイミングで負荷分散装置でエラーが返る（そのタイミングでJSESSIONIDが破棄）で次のリクエストからフロント負荷分散装置でもう片系に振られる」
-            packets.push({
-              forwardHops: [clientCardId, 'node-ext_lb'],
-              returnHops: ['node-ext_lb', clientCardId],
-              isReturning: false,
-              currentHop: 0,
-              progress: 0,
-              speed: 0.035 * State.simSpeed,
-              system: fixedWeb.system,
-              webNode: fixedWeb,
-              apNode: null,
-              stayTimer: 0,
-              stayNodeId: null,
-              orbitOffset: Math.random() * Math.PI * 2,
-              isAtDb: false,
-              isSorry: false,
-              isError: true,
-              errorCode: 503,
-              clientRef: client,
-              hasFailed: false,
-              burstParticles: []
-            });
+            p.isError = true;
+            p.errorCode = 503;
+            p.system = fixedWeb.system;
+            p.webNode = fixedWeb;
+            p.isReturning = true;
+            p.currentHop = 0;
+            p.stayTimer = 150;
+            p.stayNodeId = 'node-ext_lb';
+            p.returnHops = ['node-ext_lb', clientCardId];
             return;
           }
         }
       }
 
       // 新規接続 (sessionId === null)、または未固定の場合:
-      // ★ External LB ルール: クライアント担当系(偶数: A系 / 奇数: B系)のWeb群の中から最小コネクション(同数は号機若い順)に選定
-      // ※担当系が全滅時はもう片系(candAll)へ自動フェイルオーバー
+      // ★ External LB ルール: 最小コネクションのWEBサーバに振り分け、同数(無風状態など)であれば号機が若い順 (Web-01 < Web-02 < Web-03 < Web-04)
       if (!chosenWeb) {
-        const clientSys = (client.id % 2 === 0) ? 'A' : 'B';
-        const candSysWeb = (clientSys === 'A') ? candWebA : candWebB;
-        const targetCand = (candSysWeb.length > 0) ? candSysWeb : candAll;
-
-        targetCand.sort((a, b) => {
+        candAll.sort((a, b) => {
           if (a.activeConnections !== b.activeConnections) {
             return a.activeConnections - b.activeConnections;
           }
@@ -2267,15 +2255,31 @@
           const numB = parseInt(b.id.replace(/\D/g, ''), 10) || 0;
           return numA - numB;
         });
-        chosenWeb = targetCand[0];
+        chosenWeb = candAll[0];
       }
 
-      const chosenSys = chosenWeb.system;
+      p.webNode = chosenWeb;
+      p.system = chosenWeb.system;
+      chosenWeb.activeConnections++;
 
-      if (chosenSys === 'A') State.stats.systemACount++;
+      if (p.system === 'A') State.stats.systemACount++;
       else State.stats.systemBCount++;
 
-      const vipId = chosenSys === 'A' ? 'node-vip_a' : 'node-vip_b';
+      const vipId = (chosenWeb.system === 'A') ? 'node-vip_a' : 'node-vip_b';
+      // 経路を External LB ➜ Web ➜ VIP へ拡張
+      p.forwardHops.push('card-' + chosenWeb.id, vipId);
+      // 復路暫定セット
+      p.returnHops = [vipId, 'card-' + chosenWeb.id, 'node-ext_lb', clientCardId];
+    }
+
+    // ★ Internal LB 到着時の動的AP決定処理
+    function handleInternalLbArrival(p) {
+      const client = p.clientRef;
+      const clientCardId = client ? ('card-client-' + client.id) : p.forwardHops[0];
+      const chosenWeb = p.webNode;
+      const chosenSys = p.system;
+      const vipId = (chosenSys === 'A') ? 'node-vip_a' : 'node-vip_b';
+
       const candAps = Object.values(State.nodes).filter(n => n.id.startsWith('ap_') && n.system === chosenSys && n.lbStatus === 'up/active');
 
       // ★ Internal LB の振り分けルール (WEBサーバ単位でAPサーバに固定 & 最小コネクション優先)
@@ -2285,7 +2289,7 @@
       //    - 割り振られる前など未固定時は「号機が若い順」を優先
       // 3. 通信発生時に無通信タイマーを30秒に設定（30秒間通信が来ないと固定リセット）
       let chosenAp = null;
-      const webBinding = State.webApBindings ? State.webApBindings[chosenWeb.id] : null;
+      const webBinding = (State.webApBindings && chosenWeb) ? State.webApBindings[chosenWeb.id] : null;
 
       if (candAps.length > 0) {
         const minConn = Math.min(...candAps.map(a => a.activeConnections));
@@ -2304,11 +2308,11 @@
         if (!chosenAp) {
           leastConnAps.sort((a, b) => a.id.localeCompare(b.id));
           chosenAp = leastConnAps[0];
-          addLog('INFO', `🔗 [Internal LB] ${chosenWeb.name} ➜ ${chosenAp.name} 割り振り (最小Conn: ${chosenAp.activeConnections}, タイマー: 30s)`, '#38bdf8');
+          addLog('INFO', `🔗 [Internal LB] ${chosenWeb ? chosenWeb.name : 'Web'} ➜ ${chosenAp.name} 割り振り (最小Conn: ${chosenAp.activeConnections}, タイマー: 30s)`, '#38bdf8');
         }
 
         // 固定マッピング更新 ＆ 30秒タイマー設定
-        if (State.webApBindings) {
+        if (State.webApBindings && chosenWeb) {
           State.webApBindings[chosenWeb.id] = {
             targetApId: chosenAp.id,
             targetApName: chosenAp.name,
@@ -2319,69 +2323,32 @@
 
       // ★APサーバ全台停止時の挙動: リクエストは止まらず、Intra LB (VIP) で503エラーを赤で返却！
       if (!chosenAp) {
-        packets.push({
-          forwardHops: [clientCardId, 'node-ext_lb', 'card-' + chosenWeb.id, vipId],
-          returnHops: [vipId, 'card-' + chosenWeb.id, 'node-ext_lb', clientCardId],
-          isReturning: false,
-          currentHop: 0,
-          progress: 0,
-          speed: 0.035 * State.simSpeed,
-          system: chosenSys,
-          webNode: chosenWeb,
-          apNode: null,
-          stayTimer: 0,
-          stayNodeId: null,
-          orbitOffset: Math.random() * Math.PI * 2,
-          isAtDb: false,
-          isSorry: false,
-          isError: true,
-          errorCode: 503,
-          clientRef: client,
-          hasFailed: false,
-          burstParticles: []
-        });
+        p.isError = true;
+        p.errorCode = 503;
+        p.isReturning = true;
+        p.currentHop = 0;
+        p.stayTimer = 150;
+        p.stayNodeId = vipId;
+        p.returnHops = [vipId, 'card-' + (chosenWeb ? chosenWeb.id : ''), 'node-ext_lb', clientCardId];
+        const destName = (vipId === 'node-vip_a') ? 'VIP-A' : 'VIP-B';
+        logThrottleError(`🚨 [503 Service Unavailable] Internal LB (${destName}): 配下のAP全台停止 (down/-) のため 503 エラーを返却（赤色パケット）`);
         return;
       }
 
-      const forwardHops = [
-        clientCardId,
-        'node-ext_lb',
-        'card-' + chosenWeb.id,
-        vipId,
-        'card-' + chosenAp.id,
-        'node-db'
-      ];
+      p.apNode = chosenAp;
+      chosenAp.activeConnections++;
 
-      const returnHops = [
+      // 経路を AP ➜ DB へ拡張
+      p.forwardHops.push('card-' + chosenAp.id, 'node-db');
+      // 完全な復路を設定
+      p.returnHops = [
         'node-db',
         'card-' + chosenAp.id,
         vipId,
-        'card-' + chosenWeb.id,
+        'card-' + (chosenWeb ? chosenWeb.id : ''),
         'node-ext_lb',
         clientCardId
       ];
-
-      packets.push({
-        forwardHops,
-        returnHops,
-        isReturning: false,
-        currentHop: 0,
-        progress: 0,
-        speed: 0.035 * State.simSpeed,
-        system: chosenSys,
-        webNode: chosenWeb,
-        apNode: chosenAp,
-        stayTimer: 0,
-        stayNodeId: null,
-        orbitOffset: Math.random() * Math.PI * 2,
-        isAtDb: false,
-        isSorry: false,
-        isError: false,
-        errorCode: 200,
-        clientRef: client,
-        hasFailed: false,
-        burstParticles: []
-      });
     }
 
     // Main Canvas Render Loop (DOES NOT TOUCH BUTTONS OR REBUILD INNERHTML!)
@@ -2422,16 +2389,13 @@
         }
 
         // WEBサーバのConn受付状況:
-        // クライアントからのリクエストがWebに到着した瞬間からカウント開始。
+        // External LBからWebへ転送された瞬間(p.webNodeが割り当てられた瞬間)からカウント開始。
         // リバースプロキシとして後段(AP/DB)が処理中もクライアント接続を保持し、
         // レスポンスがWebサーバを抜けてExternal LBへ返却されるまでConnを維持！
         if (p.webNode && connCounts[p.webNode.id] !== undefined) {
           const webCardId = 'card-' + p.webNode.id;
           if (!p.isReturning) {
-            const webHop = p.forwardHops.indexOf(webCardId);
-            if (webHop !== -1 && p.currentHop >= webHop) {
-              connCounts[p.webNode.id]++;
-            }
+            connCounts[p.webNode.id]++;
           } else {
             const webReturnHop = p.returnHops.indexOf(webCardId);
             if (webReturnHop !== -1 && p.currentHop <= webReturnHop) {
@@ -2441,16 +2405,13 @@
         }
 
         // APサーバのConn受付状況:
-        // リクエストがAPに到着した瞬間からカウント開始。
+        // Internal LBからAPへ転送された瞬間(p.apNodeが割り当てられた瞬間)からカウント開始。
         // DB処理中もスレッド/コネクションを占有保持し、
         // レスポンスがAPサーバを抜けてWeb/VIPへ返却されるまでConnを維持！
         if (p.apNode && connCounts[p.apNode.id] !== undefined) {
           const apCardId = 'card-' + p.apNode.id;
           if (!p.isReturning) {
-            const apHop = p.forwardHops.indexOf(apCardId);
-            if (apHop !== -1 && p.currentHop >= apHop) {
-              connCounts[p.apNode.id]++;
-            }
+            connCounts[p.apNode.id]++;
           } else {
             const apReturnHop = p.returnHops.indexOf(apCardId);
             if (apReturnHop !== -1 && p.currentHop <= apReturnHop) {
@@ -2518,29 +2479,44 @@
           p.progress = 0;
           p.currentHop++;
 
-          const activePath = p.isReturning ? p.returnHops : p.forwardHops;
+          let activePath = p.isReturning ? p.returnHops : p.forwardHops;
+          const currentNodeId = activePath[p.currentHop];
 
           if (!p.isReturning) {
-            if (p.currentHop === 2 && State.stayDuration.web > 0 && !p.isSorry && !p.isError) {
-              p.stayTimer = State.stayDuration.web * 1000;
-              p.stayNodeId = activePath[2];
-            } else if (p.currentHop === 4 && State.stayDuration.ap > 0 && !p.isSorry && !p.isError) {
-              p.stayTimer = State.stayDuration.ap * 1000;
-              p.stayNodeId = activePath[4];
-            } else if (p.isSorry && p.currentHop === 2) {
+            // 1. External LB 到着時: 転送先 Web サーバを動的選定
+            if (currentNodeId === 'node-ext_lb') {
+              handleExtLbArrival(p);
+              if (p.isReturning) continue; // 503エラー時
+              activePath = p.forwardHops;
+            }
+            // 2. Webサーバ到着時: Web処理待ちタイマー
+            else if (currentNodeId && currentNodeId.startsWith('card-web_') && !p.isSorry && !p.isError) {
+              if (State.stayDuration.web > 0) {
+                p.stayTimer = State.stayDuration.web * 1000;
+                p.stayNodeId = currentNodeId;
+              }
+            }
+            // 3. Internal LB (VIP) 到着時: 転送先 AP サーバを動的選定
+            else if (currentNodeId === 'node-vip_a' || currentNodeId === 'node-vip_b') {
+              handleInternalLbArrival(p);
+              if (p.isReturning) continue; // 503エラー時
+              activePath = p.forwardHops;
+            }
+            // 4. APサーバ到着時: AP処理待ちタイマー
+            else if (currentNodeId && currentNodeId.startsWith('card-ap_') && !p.isSorry && !p.isError) {
+              if (State.stayDuration.ap > 0) {
+                p.stayTimer = State.stayDuration.ap * 1000;
+                p.stayNodeId = currentNodeId;
+              }
+            }
+            // 5. SORRYサーバ到着時
+            else if (p.isSorry && currentNodeId === 'card-web_sorry') {
               p.stayTimer = Math.max(100, (State.stayDuration.web || 0.3) * 1000);
               p.stayNodeId = 'card-web_sorry';
               continue;
-            } else if (p.isError && p.currentHop >= activePath.length - 1) {
-              // Intra LB (VIP) または Ext LB で 503 返却
-              p.isReturning = true;
-              p.currentHop = 0;
-              p.stayTimer = 150;
-              p.stayNodeId = activePath[activePath.length - 1];
-              const destName = (p.stayNodeId === 'node-vip_a') ? 'VIP-A' : (p.stayNodeId === 'node-vip_b' ? 'VIP-B' : 'Ext LB');
-              logThrottleError(`🚨 [503 Service Unavailable] Internal LB (${destName}): 配下のAP全台停止 (down/-) のため 503 エラーを返却（赤色パケット）`);
-              continue;
-            } else if (!p.isError && !p.isSorry && p.currentHop >= activePath.length - 1) {
+            }
+            // 6. DBサーバ到着時: DB処理待ちタイマー
+            else if (!p.isError && !p.isSorry && currentNodeId === 'node-db') {
               p.isAtDb = true;
               p.stayNodeId = 'node-db';
               p.stayTimer = Math.max(50, State.stayDuration.db * 1000);
