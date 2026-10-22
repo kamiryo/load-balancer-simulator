@@ -82,15 +82,19 @@ async def run_tests():
 
         # 3. Verify packets are strictly routed to the assigned system AP (A系 -> AP-02/04, B系 -> AP-01/03)
         print("\n--- Verifying Web-AP Routing sends packets to the appropriate system AP according to Web-AP rules ---")
-        await page.wait_for_timeout(1500)
-        routed_packets = await page.evaluate("""() => {
-            return packets.filter(p => p.apNode && p.clientRef && p.clientRef.sessionId).map(p => ({
-                clientName: p.clientRef.name,
-                system: p.system,
-                actualAp: p.apNode.name,
-                webName: p.webNode ? p.webNode.name : null
-            }));
-        }""")
+        routed_packets = []
+        for _ in range(25):
+            await page.wait_for_timeout(200)
+            routed_packets = await page.evaluate("""() => {
+                return packets.filter(p => p.apNode && p.clientRef && p.clientRef.sessionId).map(p => ({
+                    clientName: p.clientRef.name,
+                    system: p.system,
+                    actualAp: p.apNode.name,
+                    webName: p.webNode ? p.webNode.name : null
+                }));
+            }""")
+            if len(routed_packets) > 0:
+                break
         print(f"  Checked {len(routed_packets)} in-flight packets with active sessions:")
         assert len(routed_packets) > 0, "There should be in-flight packets routed to AP"
         for p_info in routed_packets[:8]:
@@ -747,6 +751,79 @@ async def run_tests():
         assert len(sus_a) == 2, f"System A must remain exactly 2 clients, but got {len(sus_a)}: {sus_a}"
         assert len(sus_b) == 2, f"System B must remain exactly 2 clients, but got {len(sus_b)}: {sus_b}"
         print("  SUCCESS: Auto -> Manual -> Auto preserves exact 2-A / 2-B client balance with zero bias!")
+
+        # 13. Test AP Session Management & 40s Idle Timeout
+        print("\n--- Testing AP-side JSESSIONID Management & 40s Idle Timeout ---")
+        ap_sessions = await page.evaluate("() => State.apSessions")
+        print(f"  AP Session store state: { {k: len(v) for k, v in ap_sessions.items()} }")
+        assert sum(len(v) for v in ap_sessions.values()) >= 4, "All active sessions must be tracked in State.apSessions"
+
+        # Simulate 40s idle timeout for Client-01
+        c1_sess = sustained_clients[0]['sessionId']
+        c1_ap_id = sustained_clients[0]['targetAp'].lower().replace('-', '_')
+        print(f"  Simulating 40s idle timeout for {sustained_clients[0]['name']} on {sustained_clients[0]['targetAp']} ({c1_sess})...")
+        await page.evaluate(f"""() => {{
+            if (State.apSessions['{c1_ap_id}']['{c1_sess}']) {{
+                State.apSessions['{c1_ap_id}']['{c1_sess}'].idleTimer = 1;
+            }}
+        }}""")
+        await page.wait_for_timeout(1400) # Wait for 1s interval to trigger expiry
+        expired_c1 = await page.evaluate(f"() => State.clients.find(c => c.id === {sustained_clients[0]['name'].split('-')[1]})")
+        print(f"  Client-01 session after 40s idle timeout: {expired_c1['sessionId']}")
+        assert expired_c1['sessionId'] is None, "Client-01 session must be cleared after 40s idle timeout"
+        print("  SUCCESS: AP-side 40s idle timeout verification passed!")
+
+        # 14. Test Session Mismatch across Different APs (Business Error / Purple Packet & Reissue)
+        print("\n--- Testing Session Mismatch Handling (Different AP receives different JSESSIONID) ---")
+        # Switch to manual mode
+        await page.click("#btn-traffic-mode")
+        await page.wait_for_timeout(300)
+
+        # Set Client-02 with an AP-01 session, but drop AP-01 so request reaches AP-03
+        await page.evaluate("""() => {
+            const c = State.clients[1]; // Client-02
+            c.sessionId = 'JSES-B-AP01-FOREIGN';
+            c.targetWeb = 'Web-01';
+            c.targetAp = 'AP-01';
+            c.system = 'B';
+            State.apSessions = {
+                ap_01: { 'JSES-B-AP01-FOREIGN': { idleTimer: 40, clientId: 2, clientName: 'Client-02' } },
+                ap_02: {},
+                ap_03: {},
+                ap_04: {}
+            };
+            State.nodes.ap_01.lbStatus = 'down/-';
+        }""")
+        print("  Client-02 has AP-01 session, but AP-01 is down/-. Sending request to AP-03...")
+        await page.evaluate("() => sendManualClientRequest(2)")
+
+        mismatch_pkt_found = False
+        reissued_new_sid = False
+        for _ in range(35):
+            await page.wait_for_timeout(200)
+            res = await page.evaluate("""() => {
+                const pkt = packets.find(p => p.isSessionMismatch);
+                const c = State.clients[1];
+                return {
+                    hasMismatchPkt: !!pkt,
+                    sid: c.sessionId,
+                    ap: c.targetAp
+                };
+            }""")
+            if res['hasMismatchPkt']:
+                mismatch_pkt_found = True
+            if res['sid'] and 'FOREIGN' not in res['sid'] and res['ap'] == 'AP-03':
+                reissued_new_sid = True
+                print(f"  Client-02 received new session from AP-03: {res['sid']} (targetAp: {res['ap']})")
+                break
+
+        assert mismatch_pkt_found, "Packet must be processed as isSessionMismatch (purple business error packet)"
+        assert reissued_new_sid, "Client-02 must receive new JSESSIONID issued by the reached AP-03"
+        print("  SUCCESS: Session mismatch business error & purple packet reissue verified successfully!")
+
+        # Recover AP-01
+        await page.evaluate("() => State.nodes.ap_01.lbStatus = 'up/active'")
+        await page.click("#btn-traffic-mode") # return to auto
 
         if errors:
             print("\n[ERROR] Errors encountered:")

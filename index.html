@@ -436,7 +436,12 @@
       <span style="color: #64748b;">|</span>
       <span style="display: flex; align-items: center; gap: 3px; color: #ef4444;">
         <span style="display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #ef4444; box-shadow: 0 0 6px #ef4444;"></span>
-        帰り(エラー 503: 赤)
+        帰り(障害 503: 赤)
+      </span>
+      <span style="color: #64748b;">|</span>
+      <span style="display: flex; align-items: center; gap: 3px; color: #e879f9;">
+        <span style="display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #e879f9; box-shadow: 0 0 6px #e879f9;"></span>
+        帰り(業務エラー/セッション再発行: 紫)
       </span>
     </div>
   </div>
@@ -792,8 +797,24 @@
         web_01: { targetApId: 'ap_01', targetApName: 'AP-01', idleTimer: 30 },
         web_03: { targetApId: 'ap_03', targetApName: 'AP-03', idleTimer: 30 }
       },
+      // APサーバ単位でのJSESSIONID管理ストア (40秒無風タイマー)
+      apSessions: {
+        ap_01: {},
+        ap_02: {},
+        ap_03: {},
+        ap_04: {}
+      },
       logs: []
     };
+
+    function initApSessions() {
+      State.apSessions = {
+        ap_01: {},
+        ap_02: {},
+        ap_03: {},
+        ap_04: {}
+      };
+    }
 
     function initWebApBindings(isClear = false) {
       if (isClear) {
@@ -983,15 +1004,26 @@
       const activeClients = State.clients.slice(0, State.clientCount);
       State.sessionTable = activeClients
         .filter(c => c.sessionId !== null)
-        .map(c => ({
-          sessionId: c.sessionId,
-          clientIp: c.ip,
-          targetWeb: c.targetWeb,
-          targetAp: c.targetAp,
-          system: c.system,
-          active: c.activeConns,
-          clientName: c.name
-        }));
+        .map(c => {
+          let idleTimer = 40;
+          if (State.apSessions && c.targetAp) {
+            const apNode = Object.values(State.nodes).find(n => n.name === c.targetAp || n.id === c.targetAp);
+            const apId = apNode ? apNode.id : c.targetAp.toLowerCase().replace('-', '_');
+            if (State.apSessions[apId] && State.apSessions[apId][c.sessionId]) {
+              idleTimer = State.apSessions[apId][c.sessionId].idleTimer;
+            }
+          }
+          return {
+            sessionId: c.sessionId,
+            clientIp: c.ip,
+            targetWeb: c.targetWeb,
+            targetAp: c.targetAp,
+            system: c.system,
+            active: c.activeConns,
+            clientName: c.name,
+            idleTimer: idleTimer
+          };
+        });
       if (State.activeRightTab === 'sessions') {
         renderRightPanel();
       }
@@ -1338,10 +1370,12 @@
         renderClientCards();
         syncSessionTable();
         initWebApBindings(true);
+        initApSessions();
       } else {
         // 通常稼働初期化時: デフォルトセッション構成に初期化
         initClients();
         initWebApBindings(false);
+        initApSessions();
       }
 
       // 7. ログ出力
@@ -1949,32 +1983,40 @@
             </div>
           </div>
 
-          <!-- 2. Client JSESSIONID 管理テーブル -->
-          <div style="margin-top: 8px; font-size: 9.5px; font-weight: bold; color: #cbd5e1;">Client JSESSIONID 管理テーブル</div>
+          <!-- 2. Client JSESSIONID 管理テーブル (APサーバ内部管理 & 40s無風破棄) -->
+          <div style="margin-top: 8px; font-size: 9.5px; font-weight: bold; color: #cbd5e1; display: flex; justify-content: space-between; align-items: center;">
+            <span>Client JSESSIONID 管理テーブル (AP個別管理)</span>
+            <span style="font-size: 8px; color: #94a3b8;">無風40秒で自動破棄</span>
+          </div>
           <div style="background: #080d1a; border: 1px solid #1e293b; border-radius: 6px; overflow: hidden; font-family: monospace; font-size: 8.5px; margin-top: 3px;">
-            <div style="background: #0f172a; padding: 5px 8px; font-weight: bold; color: #cbd5e1; border-bottom: 1px solid #1e293b; display: grid; grid-template-columns: 0.7fr 1.3fr 0.8fr 0.8fr 0.4fr;">
+            <div style="background: #0f172a; padding: 5px 8px; font-weight: bold; color: #cbd5e1; border-bottom: 1px solid #1e293b; display: grid; grid-template-columns: 0.6fr 1.3fr 0.6fr 0.6fr 0.3fr 0.6fr;">
               <span>Client</span>
-              <span>JSESSIONID (AP採番)</span>
+              <span>JSESSIONID</span>
               <span>経由Web</span>
-              <span>到達AP</span>
+              <span>保持AP</span>
               <span>Conn</span>
+              <span>有効期限</span>
             </div>
             <div style="max-height: 120px; overflow-y: auto;">
               ${State.sessionTable.map(s => `
-                <div style="padding: 4px 8px; border-bottom: 1px solid rgba(30,41,59,0.5); display: grid; grid-template-columns: 0.7fr 1.3fr 0.8fr 0.8fr 0.4fr; color: #cbd5e1; align-items: center;">
+                <div style="padding: 4px 8px; border-bottom: 1px solid rgba(30,41,59,0.5); display: grid; grid-template-columns: 0.6fr 1.3fr 0.6fr 0.6fr 0.3fr 0.6fr; color: #cbd5e1; align-items: center;">
                   <span style="font-weight: bold; color: #fff;">${s.clientName || 'Client'}</span>
                   <span style="color: ${s.system === 'A' ? '#38bdf8' : '#c084fc'}; font-weight: bold; font-size: 7.5px;">${s.sessionId}</span>
                   <span style="color: #cbd5e1;">${s.targetWeb}</span>
                   <span style="color: ${s.system === 'A' ? '#38bdf8' : '#c084fc'}; font-weight: bold;">${s.targetAp || '-'}</span>
                   <span style="color: #34d399; font-weight: bold;">${s.active}</span>
+                  <span style="color: ${s.idleTimer <= 10 ? '#ef4444' : (s.idleTimer <= 20 ? '#f59e0b' : '#34d399')}; font-weight: bold;">
+                    残り ${s.idleTimer}s
+                  </span>
                 </div>
               `).join('')}
             </div>
           </div>
 
           <div style="background: rgba(15,23,42,0.8); border: 1px solid #1e293b; padding: 7px; border-radius: 5px; font-size: 9px; color: #cbd5e1; line-height: 1.4; margin-top: 6px;">
-            💡 <b>実務ポイント (WEBサーバ単位のAP固定 & 30秒タイムアウト)</b>:
-            WEB-AP間の内部負荷分散では、Webサーバ毎のコネクション維持（送信元IP固定）によりAPとのセッション効率を高めます。通信が30秒間途絶えると固定が解除され、次回リクエスト時にコネクション最小の健全APへ再バインドされます。
+            💡 <b>実務ポイント (External LB負荷分散 & APセッション管理)</b>:<br>
+            ・<b>External LB</b>: 新規接続時は「ActiveなJSESSIONID数が最少」のWebを優先し、同数なら「TCPアクティブコネクション最少」、さらに同数なら「号機順」に分散します。<br>
+            ・<b>APセッション</b>: JSESSIONIDはAPサーバ毎にメモリ管理され、40秒間無風（無通信）だと自動破棄されます。別APへ異なるIDが届いた場合はタイムアウト等の業務エラー（紫パケット）を返し、新IDを発行します。
           </div>
         `;
       } else {
@@ -2119,6 +2161,13 @@
       // 各クライアントから公平に順繰り(ラウンドロビン)にリクエストを送出
       const client = activeClients[clientSpawnIndex % activeClients.length];
       clientSpawnIndex++;
+
+      // 初回接続（セッション未所持）のクライアントは、初回の往復が完了してJSESSIONIDを受領するまで
+      // 同一クライアントからの連続送出を待機（現実のブラウザの初期ページロード・Cookie受領動作と一致）
+      if (client.sessionId === null && client.activeConns > 0) {
+        return;
+      }
+
       sendRequestFromClient(client, false);
     }
 
@@ -2231,23 +2280,46 @@
       // 新規接続 (sessionId === null)、または未固定の場合:
       // ★ External LB ルール: 
       // クライアントごとのA系/B系縛りはなく、WEB 4台 (Web-01, Web-02, Web-03, Web-04) でロードバランシング！
-      // 1. 稼働中のWEBサーバの中でアクティブコネクションが最小のサーバ群を選定
-      // 2. 最小コネクションのサーバが複数ある場合(無風状態で同数0など):
-      //    ラウンドロビン(順繰り: Web-01 ➜ Web-02 ➜ Web-03 ➜ Web-04 ➜ Web-01...)で公平に分散！
+      // 1. HTTPレベルのActiveなJSESSIONID数（セッション数）が最小のWEBサーバ群を選定
+      // 2. セッション数が同数の場合、TCPレベルのアクティブコネクション数（その瞬間の処理中接続数）が最小のサーバ群を選定
+      // 3. それも同数の場合（無風状態で同数0など）:
+      //    号機順 (Web-01 < Web-02 < Web-03 < Web-04) でソートし、ラウンドロビンで公平に分散！
       if (!chosenWeb) {
-        const minConn = Math.min(...candAll.map(w => w.activeConnections));
-        const leastConnWebs = candAll.filter(w => w.activeConnections === minConn);
+        const webScores = candAll.map(w => {
+          // 各Webサーバに現在紐づく有効なJSESSIONID数
+          const activeSessions = State.clients.slice(0, State.clientCount).filter(c => {
+            if (!c.sessionId || (c.targetWeb !== w.name && c.targetWeb !== w.id)) return false;
+            if (State.apSessions && c.targetAp) {
+              const apNode = Object.values(State.nodes).find(n => n.name === c.targetAp || n.id === c.targetAp);
+              const apId = apNode ? apNode.id : c.targetAp.toLowerCase().replace('-', '_');
+              if (State.apSessions[apId] && !State.apSessions[apId][c.sessionId]) {
+                return false;
+              }
+            }
+            return true;
+          }).length;
 
-        // 号機順にソート (Web-01, Web-02, Web-03, Web-04)
-        leastConnWebs.sort((a, b) => {
-          const numA = parseInt(a.id.replace(/\D/g, ''), 10) || 0;
-          const numB = parseInt(b.id.replace(/\D/g, ''), 10) || 0;
-          return numA - numB;
+          return {
+            web: w,
+            activeSessions: activeSessions,
+            activeConns: w.activeConnections,
+            num: parseInt(w.id.replace(/\D/g, ''), 10) || 0
+          };
         });
 
-        // 最小コネクション群の中でラウンドロビンで選定
-        chosenWeb = leastConnWebs[extLbRoundRobinIndex % leastConnWebs.length];
+        // 1. HTTPレベルのActiveなJSESSIONID数が最少
+        const minSessions = Math.min(...webScores.map(s => s.activeSessions));
+        const leastSessionWebs = webScores.filter(s => s.activeSessions === minSessions);
+
+        // 2. その中でTCPレベルのアクティブコネクション数が最少
+        const minConns = Math.min(...leastSessionWebs.map(s => s.activeConns));
+        const leastConnWebs = leastSessionWebs.filter(s => s.activeConns === minConns);
+
+        // 3. 号機順にソート (Web-01, Web-02, Web-03, Web-04) してラウンドロビン選定
+        leastConnWebs.sort((a, b) => a.num - b.num);
+        const selected = leastConnWebs[extLbRoundRobinIndex % leastConnWebs.length];
         extLbRoundRobinIndex++;
+        chosenWeb = selected.web;
       }
 
       p.webNode = chosenWeb;
@@ -2274,16 +2346,23 @@
 
       const candAps = Object.values(State.nodes).filter(n => n.id.startsWith('ap_') && n.system === chosenSys && n.lbStatus === 'up/active');
 
-      // ★ Internal LB の振り分けルール (WEBサーバ単位でAPサーバに固定 & 最小コネクション優先)
-      // 1. 該当系の稼働中APの中で、アクティブコネクションが最も少ないAPサーバを選定
-      // 2. 最小コネクションのAPが複数ある場合（同数）:
-      //    - すでに固定されているAPが含まれていればその固定先を維持
-      //    - 割り振られる前など未固定時は「号機が若い順」を優先
-      // 3. 通信発生時に無通信タイマーを30秒に設定（30秒間通信が来ないと固定リセット）
+      // ★ Internal LB の振り分けルール
+      // 1. セッション維持（Sticky Session）:
+      //    クライアントが既存のJSESSIONIDを保持し、かつ担当APが稼働中であれば担当APを維持
+      // 2. 新規接続時または担当AP障害時:
+      //    該当系の稼働中APの中でアクティブコネクション最少のAPへディスパッチ（同数は若い号機順）
+      //    WEBサーバ単位のAP固定＆30秒無通信タイマーを適用
       let chosenAp = null;
       const webBinding = (State.webApBindings && chosenWeb) ? State.webApBindings[chosenWeb.id] : null;
 
-      if (candAps.length > 0) {
+      if (client && client.sessionId && client.targetAp) {
+        const stickyAp = candAps.find(a => a.name === client.targetAp || a.id === client.targetAp || a.id === client.targetAp.toLowerCase().replace('-', '_'));
+        if (stickyAp && stickyAp.lbStatus === 'up/active') {
+          chosenAp = stickyAp;
+        }
+      }
+
+      if (!chosenAp && candAps.length > 0) {
         const minConn = Math.min(...candAps.map(a => a.activeConnections));
         const leastConnAps = candAps.filter(a => a.activeConnections === minConn);
 
@@ -2430,6 +2509,9 @@
             if (p.isError) {
               coreColor = '#ef4444';
               glowColor = 'rgba(239, 68, 68, 0.6)';
+            } else if (p.isSessionMismatch) {
+              coreColor = '#f472b6';
+              glowColor = 'rgba(232, 121, 249, 0.7)';
             } else {
               coreColor = '#10b981';
               glowColor = 'rgba(16, 185, 129, 0.5)';
@@ -2494,8 +2576,52 @@
               if (p.isReturning) continue; // 503エラー時
               activePath = p.forwardHops;
             }
-            // 4. APサーバ到着時: AP処理待ちタイマー
+            // 4. APサーバ到着時: AP処理待ちタイマー & セッション検証
             else if (currentNodeId && currentNodeId.startsWith('card-ap_') && !p.isSorry && !p.isError) {
+              const apNode = p.apNode;
+              const client = p.clientRef;
+
+              // クライアントが既にJSESSIONIDを持っている場合、到着先APサーバのセッション管理状況を検証
+              if (client && client.sessionId && apNode) {
+                const apStore = State.apSessions ? State.apSessions[apNode.id] : null;
+                const isValidInThisAp = apStore && apStore[client.sessionId];
+
+                if (!isValidInThisAp) {
+                  // ★ 異なるAPサーバにクライアントから異なるJSESSIONIDを含めたリクエストが到達！
+                  // または40秒無風でタイムアウト破棄されたセッション！
+                  // APサーバはセッションタイムアウト等の業務エラーを返し、新たなJSESSIONIDを発行する！
+                  const oldSess = client.sessionId;
+                  const newSys = apNode.system === 'A' ? 'A' : 'B';
+                  const newSess = generateSessionId(newSys, apNode.name);
+
+                  p.isSessionMismatch = true;
+                  p.oldSessionId = oldSess;
+                  p.newSessionId = newSess;
+                  p.system = newSys;
+
+                  // 業務エラーとして即座にクライアントへ折り返し (DBへは行かずAPで新IDを発行して即座に返却)
+                  p.isReturning = true;
+                  p.currentHop = 0;
+                  p.stayTimer = 150;
+                  p.stayNodeId = currentNodeId;
+                  const vipId = (newSys === 'A') ? 'node-vip_a' : 'node-vip_b';
+                  const clientCardId = 'card-client-' + client.id;
+                  p.returnHops = [
+                    currentNodeId,
+                    vipId,
+                    p.webNode ? ('card-' + p.webNode.id) : 'node-ext_lb',
+                    'node-ext_lb',
+                    clientCardId
+                  ];
+
+                  addLog('WARN', `⚠️ [業務エラー] ${client.name}: 送信されたセッション(${oldSess})は ${apNode.name} で未管理(別AP管理または40sタイムアウト)のため、業務エラー画面として新ID(${newSess})を発行・返却します。`, '#e879f9');
+                  continue;
+                } else {
+                  // 自APで管理されている正規セッション: 40秒タイマーをリフレッシュ！
+                  apStore[client.sessionId].idleTimer = 40;
+                }
+              }
+
               if (State.stayDuration.ap > 0) {
                 p.stayTimer = State.stayDuration.ap * 1000;
                 p.stayNodeId = currentNodeId;
@@ -2535,6 +2661,32 @@
                   renderClientCards();
                   syncSessionTable();
                 }
+              } else if (p.isSessionMismatch) {
+                // 業務エラー（セッション不整合・新ID発行）を受領
+                State.stats.errorCount++;
+                if (client) {
+                  const oldSess = client.sessionId;
+                  const newSess = p.newSessionId;
+                  client.sessionId = newSess;
+                  client.targetAp = p.apNode.name;
+                  client.targetWeb = p.webNode ? p.webNode.name : client.targetWeb;
+                  client.system = p.system;
+                  client.hasSession = true;
+                  client.wasError = false;
+
+                  // 新APのセッションストアに新セッションを登録 (40秒タイマー)
+                  if (!State.apSessions[p.apNode.id]) State.apSessions[p.apNode.id] = {};
+                  State.apSessions[p.apNode.id][newSess] = {
+                    idleTimer: 40,
+                    clientId: client.id,
+                    clientName: client.name,
+                    createdAt: Date.now()
+                  };
+
+                  addLog('INFO', `🟣 [新JSESSIONID受領] ${client.name}: 業務エラー(タイムアウト)画面から新ID (${newSess}) を受領。次回以降 ${client.targetWeb} ➜ ${client.targetAp} へリクエストを継続します。`, '#e879f9');
+                  renderClientCards();
+                  syncSessionTable();
+                }
               } else {
                 if (p.isSorry) {
                   State.stats.sorryCount++;
@@ -2554,7 +2706,16 @@
                   client.system = newSys;
                   client.targetWeb = p.webNode ? p.webNode.name : (newSys === 'A' ? 'Web-02' : 'Web-01');
 
-                  addLog('INFO', `✨ [新JSESSIONID付与] ${client.name}: ${p.apNode.name}にて採番された ${client.sessionId} (固定: ${client.targetWeb} ➜ ${client.targetAp}) を受領！次回以降同一IDを維持します。`, '#34d399');
+                  // 到着先APのセッションストアに登録 (40秒無風タイマー)
+                  if (!State.apSessions[p.apNode.id]) State.apSessions[p.apNode.id] = {};
+                  State.apSessions[p.apNode.id][client.sessionId] = {
+                    idleTimer: 40,
+                    clientId: client.id,
+                    clientName: client.name,
+                    createdAt: Date.now()
+                  };
+
+                  addLog('INFO', `✨ [新JSESSIONID付与] ${client.name}: ${p.apNode.name}にて採番された ${client.sessionId} (固定: ${client.targetWeb} ➜ ${client.targetAp}) を受領！次回以降同一IDを維持します。(AP保持期限: 40s)`, '#34d399');
                   renderClientCards();
                   syncSessionTable();
                 }
@@ -2599,6 +2760,9 @@
           if (p.isError) {
             coreColor = '#ef4444';
             glowColor = 'rgba(239, 68, 68, 0.65)';
+          } else if (p.isSessionMismatch) {
+            coreColor = '#f472b6';
+            glowColor = 'rgba(232, 121, 249, 0.7)';
           } else {
             coreColor = '#10b981';
             glowColor = 'rgba(16, 185, 129, 0.55)';
@@ -2649,30 +2813,68 @@
       }, intervalMs);
     }
 
-    // 30秒無通信タイマー処理 (1秒ごとにデクリメント & タイムアウトリセット)
+    // 30秒無通信タイマー (Internal LB) & 40秒無風タイマー (APサーバセッション)
     let idleTimerInterval = null;
     function setupIdleTimerInterval() {
       if (idleTimerInterval) clearInterval(idleTimerInterval);
       idleTimerInterval = setInterval(() => {
-        if (!State.isRunning || !State.webApBindings) return;
+        if (!State.isRunning) return;
         let hasChange = false;
-        Object.keys(State.webApBindings).forEach(wid => {
-          const binding = State.webApBindings[wid];
-          if (binding && binding.idleTimer > 0) {
-            binding.idleTimer--;
-            if (binding.idleTimer === 0) {
-              const wName = State.nodes[wid] ? State.nodes[wid].name : wid;
-              const apName = binding.targetApName || 'AP';
-              addLog('WARN', `⏱️ [Internal LB] ${wName} ➜ ${apName} の固定が30秒無通信のためリセットされました。次回通信時に再割り振りします。`, '#94a3b8');
-              binding.targetApId = null;
-              binding.targetApName = null;
-              hasChange = true;
-            } else {
-              hasChange = true;
+
+        // 1. Internal LB: 30秒 Web-AP 固定タイマー
+        if (State.webApBindings) {
+          Object.keys(State.webApBindings).forEach(wid => {
+            const binding = State.webApBindings[wid];
+            if (binding && binding.idleTimer > 0) {
+              binding.idleTimer--;
+              if (binding.idleTimer === 0) {
+                const wName = State.nodes[wid] ? State.nodes[wid].name : wid;
+                const apName = binding.targetApName || 'AP';
+                addLog('WARN', `⏱️ [Internal LB] ${wName} ➜ ${apName} の固定が30秒無通信のためリセットされました。次回通信時に再割り振りします。`, '#94a3b8');
+                binding.targetApId = null;
+                binding.targetApName = null;
+                hasChange = true;
+              } else {
+                hasChange = true;
+              }
             }
-          }
-        });
+          });
+        }
+
+        // 2. APサーバ: 40秒 JSESSIONID 無風タイマー
+        if (State.apSessions) {
+          Object.keys(State.apSessions).forEach(apId => {
+            const store = State.apSessions[apId];
+            Object.keys(store).forEach(sessId => {
+              store[sessId].idleTimer--;
+              if (store[sessId].idleTimer <= 0) {
+                const apNode = State.nodes[apId];
+                const apName = apNode ? apNode.name : apId;
+                const clientName = store[sessId].clientName;
+                delete store[sessId];
+                hasChange = true;
+
+                // クライアント側でもセッション破棄
+                const targetClient = State.clients.find(c => c.sessionId === sessId);
+                if (targetClient) {
+                  targetClient.sessionId = null;
+                  targetClient.hasSession = false;
+                  targetClient.targetAp = null;
+                  targetClient.targetWeb = null;
+                  targetClient.wasError = false;
+                }
+
+                addLog('WARN', `⏱️ [APセッション破棄] ${apName}: 40秒間無通信のため ${clientName ? clientName + 'の' : ''}JSESSIONID (${sessId}) を破棄しました。次回は新規接続となります。`, '#fbbf24');
+              } else {
+                hasChange = true;
+              }
+            });
+          });
+        }
+
         if (hasChange) {
+          renderClientCards();
+          syncSessionTable();
           if (State.activeRightTab === 'sessions') {
             renderRightPanel();
           }
