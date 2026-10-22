@@ -567,7 +567,7 @@
                   <div id="vip-a-name" style="font-size: 10px; font-weight: bold; color: #38bdf8;">AP-A系代表 VIP</div>
                   <div id="vip-a-ip" style="font-size: 7.5px; color: #94a3b8; font-family: monospace;">192.168.10.10:8080</div>
                   <div id="vip-a-note" style="margin-top: 4px; font-size: 7.5px; background: rgba(8, 47, 73, 0.4); padding: 2px 4px; border-radius: 3px; color: #7dd3fc;">
-                    Web A系 ➜ AP A系(02,04)
+                    Web A系 ➜ AP A系(02,04) / Web単位固定(30s)
                   </div>
                   <div style="margin-top: 4px; font-size: 7.5px; font-family: monospace; display: flex; justify-content: space-between;">
                     <span>AP健全台数:</span>
@@ -587,7 +587,7 @@
                   <div id="vip-b-name" style="font-size: 10px; font-weight: bold; color: #c084fc;">AP-B系代表 VIP</div>
                   <div id="vip-b-ip" style="font-size: 7.5px; color: #94a3b8; font-family: monospace;">192.168.20.10:8080</div>
                   <div id="vip-b-note" style="margin-top: 4px; font-size: 7.5px; background: rgba(59, 7, 100, 0.4); padding: 2px 4px; border-radius: 3px; color: #d8b4fe;">
-                    Web B系 ➜ AP B系(01,03)
+                    Web B系 ➜ AP B系(01,03) / Web単位固定(30s)
                   </div>
                   <div style="margin-top: 4px; font-size: 7.5px; font-family: monospace; display: flex; justify-content: space-between;">
                     <span>AP健全台数:</span>
@@ -785,8 +785,33 @@
       clients: [],
       nodes: initNodesFromConfig(),
       sessionTable: [],
+      // Internal LB の WEB-AP 固定ルーティング (Webサーバ単位でAPに固定, 30秒無通信タイマー)
+      webApBindings: {
+        web_02: { targetApId: 'ap_02', targetApName: 'AP-02', idleTimer: 30 },
+        web_04: { targetApId: 'ap_04', targetApName: 'AP-04', idleTimer: 30 },
+        web_01: { targetApId: 'ap_01', targetApName: 'AP-01', idleTimer: 30 },
+        web_03: { targetApId: 'ap_03', targetApName: 'AP-03', idleTimer: 30 }
+      },
       logs: []
     };
+
+    function initWebApBindings(isClear = false) {
+      if (isClear) {
+        State.webApBindings = {
+          web_02: { targetApId: null, targetApName: null, idleTimer: 0 },
+          web_04: { targetApId: null, targetApName: null, idleTimer: 0 },
+          web_01: { targetApId: null, targetApName: null, idleTimer: 0 },
+          web_03: { targetApId: null, targetApName: null, idleTimer: 0 }
+        };
+      } else {
+        State.webApBindings = {
+          web_02: { targetApId: 'ap_02', targetApName: 'AP-02', idleTimer: 30 },
+          web_04: { targetApId: 'ap_04', targetApName: 'AP-04', idleTimer: 30 },
+          web_01: { targetApId: 'ap_01', targetApName: 'AP-01', idleTimer: 30 },
+          web_03: { targetApId: 'ap_03', targetApName: 'AP-03', idleTimer: 30 }
+        };
+      }
+    }
 
     // 外部定義ファイルから負荷分散NW装置の表示内容を適用
     function applyNetworkDevicesConfig() {
@@ -1078,6 +1103,18 @@
         if (node.id.startsWith('web_')) {
           State.sessionTable = State.sessionTable.filter(s => s.targetWeb !== node.name);
         }
+        if (node.id.startsWith('ap_')) {
+          // このAPに固定されていたWebのbindingをリセット
+          if (State.webApBindings) {
+            Object.keys(State.webApBindings).forEach(wid => {
+              if (State.webApBindings[wid].targetApId === node.id) {
+                State.webApBindings[wid].targetApId = null;
+                State.webApBindings[wid].targetApName = null;
+                State.webApBindings[wid].idleTimer = 0;
+              }
+            });
+          }
+        }
         addLog('ERROR', `💥 [死活監視DOWN検知] ${node.name}: ヘルスチェック応答途絶！ステータス: down/-。LBが切り離し実施 (${aborted} conn強制切断)。`, '#ef4444');
       }
 
@@ -1129,6 +1166,7 @@
         }
       });
       packets.forEach(p => { if (!p.isSorry && !p.isReturning) p.hasFailed = true; });
+      initWebApBindings(true);
       addLog('ALERT', '🚨 【死活監視テスト】AP全滅シミュレーション！全台 down/-。Internal LBが503エラー(赤パケット)を返却します。', '#ef4444');
       renderAllCardsFull();
       renderRightPanel();
@@ -1313,9 +1351,11 @@
         });
         renderClientCards();
         syncSessionTable();
+        initWebApBindings(true);
       } else {
         // 通常稼働初期化時: デフォルトセッション構成に初期化
         initClients();
+        initWebApBindings(false);
       }
 
       // 7. ログ出力
@@ -1598,6 +1638,8 @@
           </div>
         `;
       } else if (node.id.startsWith('web_')) {
+        const b = State.webApBindings ? State.webApBindings[id] : null;
+        const bindText = (b && b.targetApName && b.idleTimer > 0) ? `${b.targetApName} (${b.idleTimer}s)` : '(未固定)';
         el.innerHTML = `
           <div style="display: flex; justify-content: space-between; align-items: center;">
             <span style="font-weight: bold; font-family: monospace; color: ${titleColor}; font-size: 10px;">${node.name}</span>
@@ -1609,6 +1651,9 @@
           <div style="margin-top: 2px; display: flex; justify-content: space-between; font-size: 8.5px; font-family: monospace; color: #94a3b8;">
             <span>Conn: <b id="conn-val-${id}" style="color: #fff; font-size: 9.5px;">${node.activeConnections}</b></span>
             <span>滞留: <b id="stay-val-${id}" style="color: #38bdf8;">${State.stayDuration.web}s</b></span>
+          </div>
+          <div style="margin-top: 1px; display: flex; justify-content: space-between; font-size: 7.5px; font-family: monospace; color: #64748b;">
+            <span>固定AP: <b id="ap-bind-${id}" style="color: ${node.system === 'A' ? '#38bdf8' : '#c084fc'};">${bindText}</b></span>
           </div>
           <div id="dots-${id}" style="min-height: 7px; margin-top: 2px;"></div>
         `;
@@ -1651,6 +1696,14 @@
         if (cpuEl) {
           cpuEl.innerText = node.cpu + '%';
           cpuEl.style.color = node.cpu > 70 ? '#f59e0b' : '#cbd5e1';
+        }
+
+        if (id.startsWith('web_') && id !== 'web_sorry') {
+          const bindEl = document.getElementById('ap-bind-' + id);
+          if (bindEl && State.webApBindings && State.webApBindings[id]) {
+            const b = State.webApBindings[id];
+            bindEl.innerText = (b.targetApName && b.idleTimer > 0) ? `${b.targetApName} (${b.idleTimer}s)` : '(未固定)';
+          }
         }
 
         // Dots container
@@ -1865,25 +1918,66 @@
         `;
         container.innerHTML = jobsHtml;
       } else if (State.activeRightTab === 'sessions') {
+        const webKeys = ['web_02', 'web_04', 'web_01', 'web_03'];
         container.innerHTML = `
-          <div style="font-size: 10.5px; color: #94a3b8; line-height: 1.4;">
-            <b>負荷分散装置 セッション管理テーブル</b><br>
-            <code>JSESSIONID</code> はAPサーバにて採番管理されます。WEB-AP（Internal LB）の通信も、そのJSESSIONIDを採番したAPサーバへ確実に固定ルーティング（Sticky Session）されます。
+          <div style="font-size: 10px; color: #94a3b8; line-height: 1.4;">
+            <b style="color: #fff; font-size: 10.5px;">Internal LB WEB-AP固定ルーティング & セッション管理</b><br>
+            Internal LB は <b>WEBサーバ単位でAPサーバに固定（送信元IPパーシステンス）</b> します。未割り振り時は「コネクション最少（同数は若い号機順）」で割り振られ、<b>30秒間通信がないと固定が自動リセット</b> されます。
           </div>
 
-          <div style="background: #080d1a; border: 1px solid #1e293b; border-radius: 6px; overflow: hidden; font-family: monospace; font-size: 9px;">
-            <div style="background: #0f172a; padding: 6px 8px; font-weight: bold; color: #cbd5e1; border-bottom: 1px solid #1e293b; display: grid; grid-template-columns: 0.7fr 1.3fr 0.8fr 0.8fr 0.4fr;">
+          <!-- 1. WEB-AP固定ルーティングテーブル -->
+          <div style="margin-top: 6px; font-size: 9.5px; font-weight: bold; color: #cbd5e1; display: flex; justify-content: space-between;">
+            <span>🔗 WEB ➜ AP 固定マッピング (送信元Web固定)</span>
+            <span style="font-size: 8px; color: #94a3b8;">無通信30秒で自動リセット</span>
+          </div>
+          <div style="background: #080d1a; border: 1px solid #1e293b; border-radius: 6px; overflow: hidden; font-family: monospace; font-size: 8.5px; margin-top: 3px;">
+            <div style="background: #0f172a; padding: 5px 8px; font-weight: bold; color: #cbd5e1; border-bottom: 1px solid #1e293b; display: grid; grid-template-columns: 0.9fr 0.9fr 1fr 0.7fr 0.8fr;">
+              <span>WEBサーバ</span>
+              <span>固定先AP</span>
+              <span>無通信タイマー</span>
+              <span>AP Conn</span>
+              <span>状態</span>
+            </div>
+            <div>
+              ${webKeys.map(wid => {
+                const w = State.nodes[wid];
+                const b = State.webApBindings ? State.webApBindings[wid] : null;
+                const isBound = b && b.targetApName && b.idleTimer > 0;
+                const apNode = isBound ? State.nodes[b.targetApId] : null;
+                const connCount = apNode ? apNode.activeConnections : 0;
+                const sysColor = (w && w.system === 'A') ? '#38bdf8' : '#c084fc';
+                return `
+                  <div style="padding: 4px 8px; border-bottom: 1px solid rgba(30,41,59,0.5); display: grid; grid-template-columns: 0.9fr 0.9fr 1fr 0.7fr 0.8fr; color: #cbd5e1; align-items: center;">
+                    <span style="font-weight: bold; color: ${sysColor};">${w ? w.name : wid}</span>
+                    <span style="font-weight: bold; color: ${isBound ? sysColor : '#64748b'};">${isBound ? b.targetApName : '(未固定)'}</span>
+                    <span style="color: ${isBound ? (b.idleTimer <= 5 ? '#f59e0b' : '#34d399') : '#64748b'}; font-weight: bold;">
+                      ${isBound ? `残り ${b.idleTimer}s` : 'リセット済'}
+                    </span>
+                    <span style="color: #fff; font-weight: bold;">${isBound ? connCount : 0}</span>
+                    <span style="color: ${isBound ? '#34d399' : '#94a3b8'}; font-size: 7.5px;">
+                      ${isBound ? '● ACTIVE' : '○ IDLE'}
+                    </span>
+                  </div>
+                `;
+              }).join('')}
+            </div>
+          </div>
+
+          <!-- 2. Client JSESSIONID 管理テーブル -->
+          <div style="margin-top: 8px; font-size: 9.5px; font-weight: bold; color: #cbd5e1;">Client JSESSIONID 管理テーブル</div>
+          <div style="background: #080d1a; border: 1px solid #1e293b; border-radius: 6px; overflow: hidden; font-family: monospace; font-size: 8.5px; margin-top: 3px;">
+            <div style="background: #0f172a; padding: 5px 8px; font-weight: bold; color: #cbd5e1; border-bottom: 1px solid #1e293b; display: grid; grid-template-columns: 0.7fr 1.3fr 0.8fr 0.8fr 0.4fr;">
               <span>Client</span>
               <span>JSESSIONID (AP採番)</span>
-              <span>Web</span>
-              <span>AP (Sticky)</span>
+              <span>経由Web</span>
+              <span>到達AP</span>
               <span>Conn</span>
             </div>
-            <div style="max-height: 220px; overflow-y: auto;">
+            <div style="max-height: 120px; overflow-y: auto;">
               ${State.sessionTable.map(s => `
-                <div style="padding: 5px 8px; border-bottom: 1px solid rgba(30,41,59,0.5); display: grid; grid-template-columns: 0.7fr 1.3fr 0.8fr 0.8fr 0.4fr; color: #cbd5e1; align-items: center;">
+                <div style="padding: 4px 8px; border-bottom: 1px solid rgba(30,41,59,0.5); display: grid; grid-template-columns: 0.7fr 1.3fr 0.8fr 0.8fr 0.4fr; color: #cbd5e1; align-items: center;">
                   <span style="font-weight: bold; color: #fff;">${s.clientName || 'Client'}</span>
-                  <span style="color: ${s.system === 'A' ? '#38bdf8' : '#c084fc'}; font-weight: bold; font-size: 8px;">${s.sessionId}</span>
+                  <span style="color: ${s.system === 'A' ? '#38bdf8' : '#c084fc'}; font-weight: bold; font-size: 7.5px;">${s.sessionId}</span>
                   <span style="color: #cbd5e1;">${s.targetWeb}</span>
                   <span style="color: ${s.system === 'A' ? '#38bdf8' : '#c084fc'}; font-weight: bold;">${s.targetAp || '-'}</span>
                   <span style="color: #34d399; font-weight: bold;">${s.active}</span>
@@ -1892,9 +1986,9 @@
             </div>
           </div>
 
-          <div style="background: rgba(15,23,42,0.8); border: 1px solid #1e293b; padding: 8px; border-radius: 5px; font-size: 10px; color: #cbd5e1; line-height: 1.4;">
-            💡 <b>実務ポイント</b>:
-            JSESSIONIDには採番したAP情報が含まれており（jvmRoute）、Internal LBは同一セッションのパケットを必ずその採番APへ配送します。採番APが障害やデプロイ等で落ちた場合は、別APへの片寄せ時に新IDが再採番されます。
+          <div style="background: rgba(15,23,42,0.8); border: 1px solid #1e293b; padding: 7px; border-radius: 5px; font-size: 9px; color: #cbd5e1; line-height: 1.4; margin-top: 6px;">
+            💡 <b>実務ポイント (WEBサーバ単位のAP固定 & 30秒タイムアウト)</b>:
+            WEB-AP間の内部負荷分散では、Webサーバ毎のコネクション維持（送信元IP固定）によりAPとのセッション効率を高めます。通信が30秒間途絶えると固定が解除され、次回リクエスト時にコネクション最小の健全APへ再バインドされます。
           </div>
         `;
       } else {
@@ -2166,45 +2260,46 @@
       const vipId = chosenSys === 'A' ? 'node-vip_a' : 'node-vip_b';
       const candAps = Object.values(State.nodes).filter(n => n.id.startsWith('ap_') && n.system === chosenSys && n.lbStatus === 'up/active');
 
-      // ★JSESSIONIDはAPサーバにて採番管理される。
-      // そのため、WEB-APのリクエストは負荷分散時にそのJSESSIONIDを採番したAPサーバに飛んでいく！
+      // ★ Internal LB の振り分けルール (WEBサーバ単位でAPサーバに固定)
+      // 1. WEBサーバ単位にAPサーバで固定
+      // 2. コネクションが少ない順、割り振られる前（同数）は号機が若い順APサーバに割り振り
+      // 3. WEB-AP間の負荷分散装置目線でWEBからAP宛の30秒間通信が来ないとリセット
       let chosenAp = null;
+      const webBinding = State.webApBindings ? State.webApBindings[chosenWeb.id] : null;
 
-      if (client.sessionId && client.targetAp) {
-        const fixedAp = Object.values(State.nodes).find(n => n.name === client.targetAp || n.id === client.targetAp || n.id === client.targetAp.toLowerCase().replace('-', '_'));
+      if (webBinding && webBinding.targetApId && webBinding.idleTimer > 0) {
+        const fixedAp = State.nodes[webBinding.targetApId];
         if (fixedAp && fixedAp.lbStatus === 'up/active') {
-          chosenAp = fixedAp; // ★採番したAPサーバへ確実にルーティング！
+          // 固定先APが健全: 30秒タイマーをリセット(延長)して転送
+          chosenAp = fixedAp;
+          webBinding.idleTimer = 30;
         } else {
-          // 固定先APがダウン(down/-)または保守停止中: Internal LB (VIP) から503エラー(赤パケット)を返却！
-          packets.push({
-            forwardHops: [clientCardId, 'node-ext_lb', 'card-' + chosenWeb.id, vipId],
-            returnHops: [vipId, 'card-' + chosenWeb.id, 'node-ext_lb', clientCardId],
-            isReturning: false,
-            currentHop: 0,
-            progress: 0,
-            speed: 0.035 * State.simSpeed,
-            system: chosenSys,
-            webNode: chosenWeb,
-            apNode: null,
-            stayTimer: 0,
-            stayNodeId: null,
-            orbitOffset: Math.random() * Math.PI * 2,
-            isAtDb: false,
-            isSorry: false,
-            isError: true,
-            errorCode: 503,
-            clientRef: client,
-            hasFailed: false,
-            burstParticles: []
-          });
-          return;
+          // 固定先APがダウン(down/-)または保守停止中: 固定をリセットして健全APへ再選定
+          webBinding.targetApId = null;
+          webBinding.targetApName = null;
+          webBinding.idleTimer = 0;
         }
       }
 
-      // 新規セッション (sessionId === null) の場合は稼働中APから選定
+      // 未固定（初回、30秒無通信リセット後、または障害フェイルオーバー時）:
       if (!chosenAp) {
         if (candAps.length > 0) {
-          chosenAp = candAps[Math.floor(Math.random() * candAps.length)];
+          // ルール: コネクションが少ない順、同数(割り振られる前など)は号機が若い順
+          candAps.sort((a, b) => {
+            if (a.activeConnections !== b.activeConnections) {
+              return a.activeConnections - b.activeConnections;
+            }
+            return a.id.localeCompare(b.id);
+          });
+          chosenAp = candAps[0];
+          if (State.webApBindings) {
+            State.webApBindings[chosenWeb.id] = {
+              targetApId: chosenAp.id,
+              targetApName: chosenAp.name,
+              idleTimer: 30
+            };
+          }
+          addLog('INFO', `🔗 [Internal LB] ${chosenWeb.name} ➜ ${chosenAp.name} 固定化 (Conn: ${chosenAp.activeConnections}, タイマー: 30s)`, '#38bdf8');
         }
       }
 
@@ -2572,6 +2667,37 @@
       }, intervalMs);
     }
 
+    // 30秒無通信タイマー処理 (1秒ごとにデクリメント & タイムアウトリセット)
+    let idleTimerInterval = null;
+    function setupIdleTimerInterval() {
+      if (idleTimerInterval) clearInterval(idleTimerInterval);
+      idleTimerInterval = setInterval(() => {
+        if (!State.isRunning || !State.webApBindings) return;
+        let hasChange = false;
+        Object.keys(State.webApBindings).forEach(wid => {
+          const binding = State.webApBindings[wid];
+          if (binding && binding.idleTimer > 0) {
+            binding.idleTimer--;
+            if (binding.idleTimer === 0) {
+              const wName = State.nodes[wid] ? State.nodes[wid].name : wid;
+              const apName = binding.targetApName || 'AP';
+              addLog('WARN', `⏱️ [Internal LB] ${wName} ➜ ${apName} の固定が30秒無通信のためリセットされました。次回通信時に再割り振りします。`, '#94a3b8');
+              binding.targetApId = null;
+              binding.targetApName = null;
+              hasChange = true;
+            } else {
+              hasChange = true;
+            }
+          }
+        });
+        if (hasChange) {
+          if (State.activeRightTab === 'sessions') {
+            renderRightPanel();
+          }
+        }
+      }, 1000);
+    }
+
     // Initialize
     window.addEventListener('DOMContentLoaded', () => {
       canvas = document.getElementById('packetCanvas');
@@ -2583,6 +2709,7 @@
       applyNetworkDevicesConfig();
       initClients();
       setupPacketSpawner();
+      setupIdleTimerInterval();
       renderAllCardsFull();
       setRightTab('jobs');
       renderMetrics();

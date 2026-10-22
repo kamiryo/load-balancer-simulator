@@ -28,12 +28,12 @@ window.SIM_CONFIG = {
       vipA: {
         name: "AP-A系代表 VIP",
         ip: "192.168.10.10:8080",
-        routingNote: "Web A系 ➜ AP A系(02,04)"
+        routingNote: "Web A系 ➜ AP A系(02,04) / Web単位固定(30s)"
       },
       vipB: {
         name: "AP-B系代表 VIP",
         ip: "192.168.20.10:8080",
-        routingNote: "Web B系 ➜ AP B系(01,03)"
+        routingNote: "Web B系 ➜ AP B系(01,03) / Web単位固定(30s)"
       }
     },
 
