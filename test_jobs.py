@@ -1,11 +1,15 @@
 import asyncio
 import sys
+import os
 from playwright.async_api import async_playwright
 
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8')
 if hasattr(sys.stderr, 'reconfigure'):
     sys.stderr.reconfigure(encoding='utf-8')
+
+HTML_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "index.html")).replace("\\", "/")
+FILE_URL = f"file:///{HTML_PATH}"
 
 async def run_tests():
     errors = []
@@ -19,8 +23,8 @@ async def run_tests():
         page.on('console', on_console)
         page.on('pageerror', lambda err: errors.append(f"Page error: {err}"))
 
-        print(">>> Navigating to http://127.0.0.1:8095/index.html...")
-        await page.goto("http://127.0.0.1:8095/index.html")
+        print(f">>> Navigating to {FILE_URL}...")
+        await page.goto(FILE_URL)
         await page.wait_for_timeout(1000)
 
         # 1. Check title & canvas
@@ -90,7 +94,7 @@ async def run_tests():
             print(f"  AP-02 status after drop: {status_ap02}")
             assert "down/-" in status_ap02
 
-            # Wait for failover to another AP (e.g. AP-04 or AP-06) and new JSESSIONID re-assignment
+            # Wait for failover to another AP (e.g. AP-04) and new JSESSIONID re-assignment
             reassigned = False
             new_session_id = None
             for sec in range(1, 16):
