@@ -412,14 +412,13 @@ async def run_tests():
 
         # 9. Verify WEB-AP Persistence & 30s Idle Timeout Reset Rules
         print("\n--- Testing WEB-to-AP Persistence, Least-Conn / Lowest Node ID Rule & 30s Idle Timeout ---")
-        # Wait 2.5s for auto traffic to route through all 4 webs and establish bindings
-        await page.wait_for_timeout(2500)
+        await page.evaluate("() => initWebApBindings(false)")
         bindings = await page.evaluate("() => State.webApBindings")
         print(f"  Current Web-AP Bindings: {bindings}")
-        assert bindings['web_02']['targetApId'] in ['ap_02', 'ap_04'], "Web-02 must be bound to A-system AP"
-        assert bindings['web_04']['targetApId'] in ['ap_02', 'ap_04'], "Web-04 must be bound to A-system AP"
-        assert bindings['web_01']['targetApId'] in ['ap_01', 'ap_03'], "Web-01 must be bound to B-system AP"
-        assert bindings['web_03']['targetApId'] in ['ap_01', 'ap_03'], "Web-03 must be bound to B-system AP"
+        assert bindings['web_02']['targetApId'] == 'ap_02', "Web-02 must be bound to AP-02"
+        assert bindings['web_04']['targetApId'] == 'ap_04', "Web-04 must be bound to AP-04"
+        assert bindings['web_01']['targetApId'] == 'ap_01', "Web-01 must be bound to AP-01"
+        assert bindings['web_03']['targetApId'] == 'ap_03', "Web-03 must be bound to AP-03"
 
         # Test timeout simulation: pause auto traffic to test timeout cleanly
         await page.evaluate("""() => {
@@ -576,6 +575,72 @@ async def run_tests():
                 break
         assert packet2_routed, "Client-02 must route through Web-01 -> AP-03 because AP-03 has least connections"
         print("  SUCCESS: User-specified Web-AP Least-Connection & Persistence test passed completely!")
+
+        # 11. Verify Client-to-Web Load Balancing (Calm State / Zero-Traffic -> Least Conn & Lowest Node ID)
+        print("\n--- Testing Client-to-Web Load Balancing (Zero-Traffic / Least-Conn & Lowest Node ID) ---")
+        await page.evaluate("""() => {
+            // Restore all web nodes to up/active
+            State.nodes.web_01.lbStatus = 'up/active';
+            State.nodes.web_02.lbStatus = 'up/active';
+            State.nodes.web_03.lbStatus = 'up/active';
+            State.nodes.web_04.lbStatus = 'up/active';
+            // Set calm state: all activeConnections = 0
+            State.nodes.web_01.activeConnections = 0;
+            State.nodes.web_02.activeConnections = 0;
+            State.nodes.web_03.activeConnections = 0;
+            State.nodes.web_04.activeConnections = 0;
+            packets.length = 0;
+            // Clear client sessions
+            State.clients.forEach(c => {
+                c.sessionId = null;
+                c.targetWeb = null;
+                c.targetAp = null;
+                c.hasSession = false;
+            });
+        }""")
+
+        # 11-1. When all 4 webs have equal conn (0 vs 0 vs 0 vs 0), request must route to lowest node ID (Web-01)
+        await page.evaluate("() => sendManualClientRequest(1)")
+        p_calm1 = await page.evaluate("() => packets[packets.length - 1] ? packets[packets.length - 1].webNode.name : null")
+        print(f"  All webs conn=0 -> Assigned to: {p_calm1}")
+        assert p_calm1 == 'Web-01', "From calm state (equal conn=0), request must be assigned to lowest node Web-01"
+
+        # 11-2. When Web-01 conn=1, Web-02/03/04 conn=0, request must route to Web-02
+        await page.evaluate("""() => {
+            State.nodes.web_01.activeConnections = 1;
+            State.nodes.web_02.activeConnections = 0;
+            State.nodes.web_03.activeConnections = 0;
+            State.nodes.web_04.activeConnections = 0;
+            sendManualClientRequest(1);
+        }""")
+        p_calm2 = await page.evaluate("() => packets[packets.length - 1] ? packets[packets.length - 1].webNode.name : null")
+        print(f"  Web-01 conn=1 vs Web-02..04 conn=0 -> Assigned to: {p_calm2}")
+        assert p_calm2 == 'Web-02', "When Web-01 is busy, request must be assigned to next lowest node Web-02"
+
+        # 11-3. When Web-01 conn=1, Web-02 conn=1, Web-03/04 conn=0, request must route to Web-03
+        await page.evaluate("""() => {
+            State.nodes.web_01.activeConnections = 1;
+            State.nodes.web_02.activeConnections = 1;
+            State.nodes.web_03.activeConnections = 0;
+            State.nodes.web_04.activeConnections = 0;
+            sendManualClientRequest(1);
+        }""")
+        p_calm3 = await page.evaluate("() => packets[packets.length - 1] ? packets[packets.length - 1].webNode.name : null")
+        print(f"  Web-01,02 conn=1 vs Web-03,04 conn=0 -> Assigned to: {p_calm3}")
+        assert p_calm3 == 'Web-03', "When Web-01,02 are busy, request must be assigned to next lowest node Web-03"
+
+        # 11-4. When Web-01,02,03 conn=1, Web-04 conn=0, request must route to Web-04
+        await page.evaluate("""() => {
+            State.nodes.web_01.activeConnections = 1;
+            State.nodes.web_02.activeConnections = 1;
+            State.nodes.web_03.activeConnections = 1;
+            State.nodes.web_04.activeConnections = 0;
+            sendManualClientRequest(1);
+        }""")
+        p_calm4 = await page.evaluate("() => packets[packets.length - 1] ? packets[packets.length - 1].webNode.name : null")
+        print(f"  Web-01..03 conn=1 vs Web-04 conn=0 -> Assigned to: {p_calm4}")
+        assert p_calm4 == 'Web-04', "When Web-01,02,03 are busy, request must be assigned to Web-04"
+        print("  SUCCESS: Client-to-Web Least-Connection and Lowest-Node-ID routing verified completely!")
 
         if errors:
             print("\n[ERROR] Errors encountered:")
