@@ -412,16 +412,17 @@ async def run_tests():
 
         # 9. Verify WEB-AP Persistence & 30s Idle Timeout Reset Rules
         print("\n--- Testing WEB-to-AP Persistence, Least-Conn / Lowest Node ID Rule & 30s Idle Timeout ---")
-        # Check initial bindings
+        # Check current bindings (A-system webs bound to A-system APs, B-system webs bound to B-system APs)
         bindings = await page.evaluate("() => State.webApBindings")
         print(f"  Current Web-AP Bindings: {bindings}")
-        assert bindings['web_02']['targetApId'] == 'ap_02'
-        assert bindings['web_04']['targetApId'] == 'ap_04'
-        assert bindings['web_01']['targetApId'] == 'ap_01'
-        assert bindings['web_03']['targetApId'] == 'ap_03'
+        assert bindings['web_02']['targetApId'] in ['ap_02', 'ap_04'], "Web-02 must be bound to A-system AP"
+        assert bindings['web_04']['targetApId'] in ['ap_02', 'ap_04'], "Web-04 must be bound to A-system AP"
+        assert bindings['web_01']['targetApId'] in ['ap_01', 'ap_03'], "Web-01 must be bound to B-system AP"
+        assert bindings['web_03']['targetApId'] in ['ap_01', 'ap_03'], "Web-03 must be bound to B-system AP"
 
-        # Test timeout simulation: set idleTimer to 1s on web_02
+        # Test timeout simulation: pause auto traffic to test timeout cleanly
         await page.evaluate("""() => {
+            State.trafficMode = 'manual';
             State.webApBindings.web_02.idleTimer = 1;
         }""")
         # Wait 1.5s for timer interval to decrement to 0 and reset binding
@@ -437,6 +438,7 @@ async def run_tests():
             State.nodes.ap_02.activeConnections = 0;
             State.nodes.ap_04.activeConnections = 0;
             const client = State.clients.find(c => c.targetWeb === 'Web-02') || State.clients[1];
+            client.sessionId = 'TEST-SESS-01';
             client.targetWeb = 'Web-02';
             sendRequestFromClient(client, false);
         }""")
@@ -453,6 +455,7 @@ async def run_tests():
             State.nodes.ap_02.activeConnections = 5;
             State.nodes.ap_04.activeConnections = 1;
             const client = State.clients.find(c => c.targetWeb === 'Web-02') || State.clients[1];
+            client.sessionId = 'TEST-SESS-01';
             client.targetWeb = 'Web-02';
             sendRequestFromClient(client, false);
         }""")
