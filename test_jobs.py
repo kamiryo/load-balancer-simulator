@@ -33,7 +33,35 @@ async def run_tests():
         canvas = await page.query_selector("#packetCanvas")
         assert canvas is not None, "packetCanvas not found"
 
-        # 2. Check that JSESSIONID contains the AP name and clients have targetAp
+        # 2. Verify initial state: clients start with NO JSESSIONID on Page Load
+        print("\n--- Testing Initial State: Clients start with NO JSESSIONID on Page Load ---")
+        initial_clients_data = await page.evaluate("""() => {
+            return State.clients.slice(0, State.clientCount).map(c => ({
+                id: c.id,
+                name: c.name,
+                sessionId: c.sessionId,
+                targetWeb: c.targetWeb,
+                targetAp: c.targetAp,
+                system: c.system
+            }));
+        }""")
+        for c in initial_clients_data:
+            print(f"  {c['name']} initially: sessionId={c['sessionId']}, targetAp={c['targetAp']}")
+            assert c['sessionId'] is None, f"{c['name']} must start with sessionId=None on initial page load"
+            assert c['targetAp'] is None, f"{c['name']} must start with targetAp=None on initial page load"
+
+        # Wait for auto-traffic to make the first request and receive responses from APs
+        print("  Waiting for first requests to complete and AP to assign JSESSIONID...")
+        for _ in range(50): # up to 10 seconds
+            await page.wait_for_timeout(200)
+            all_assigned = await page.evaluate("""() => {
+                const active = State.clients.slice(0, State.clientCount);
+                return active.every(c => c.sessionId !== null && c.targetAp !== null);
+            }""")
+            if all_assigned:
+                break
+
+        # Now verify that JSESSIONID has been issued by reaching APs
         print("\n--- Testing AP-based JSESSIONID Generation & Sticky AP Mapping ---")
         clients_data = await page.evaluate("""() => {
             return State.clients.slice(0, State.clientCount).map(c => ({
@@ -47,7 +75,8 @@ async def run_tests():
         }""")
         for c in clients_data:
             print(f"  {c['name']}: JSESSIONID={c['sessionId']} -> Sticky: {c['targetWeb']} -> {c['targetAp']}")
-            assert c['targetAp'] is not None, f"{c['name']} must have targetAp"
+            assert c['targetAp'] is not None, f"{c['name']} must have targetAp after first request"
+            assert c['sessionId'] is not None, f"{c['name']} must have sessionId after first request"
             ap_tag = c['targetAp'].replace('-', '')
             assert ap_tag in c['sessionId'], f"JSESSIONID {c['sessionId']} must contain AP identifier {ap_tag}"
 

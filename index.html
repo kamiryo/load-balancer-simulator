@@ -904,35 +904,16 @@
 
     function initClients() {
       State.clients = [];
-      const webA = Object.values(State.nodes).filter(n => n.id.startsWith('web_') && n.system === 'A');
-      const webB = Object.values(State.nodes).filter(n => n.id.startsWith('web_') && n.system === 'B');
-      const apA = Object.values(State.nodes).filter(n => n.id.startsWith('ap_') && n.system === 'A');
-      const apB = Object.values(State.nodes).filter(n => n.id.startsWith('ap_') && n.system === 'B');
-
       for (let i = 1; i <= 10; i++) {
-        const sys = (i % 2 === 0) ? 'A' : 'B';
-        const webList = (sys === 'A') ? webA : webB;
-        const apList = (sys === 'A') ? apA : apB;
-
-        const webNode = webList.length > 0 ? webList[(Math.floor((i - 1) / 2)) % webList.length] : null;
-        const web = webNode ? webNode.name : 'Web-01';
-        // WEBサーバ単位で固定されたAPサーバに紐づけ
-        const binding = (webNode && State.webApBindings) ? State.webApBindings[webNode.id] : null;
-        const ap = (binding && binding.targetApName) ? binding.targetApName : (apList.length > 0 ? apList[0].name : 'AP-01');
-
-        // 初期表示中の4台のみ通常稼働セッションあり、5台目以降(5〜10)は新規追加用のため未所持(null)
-        const isInitialActive = (i <= 4);
-        const sess = isInitialActive ? generateSessionId(sys, ap) : null;
-
         State.clients.push({
           id: i,
           name: `Client-${String(i).padStart(2, '0')}`,
           ip: `192.168.1.${100 + i}`,
-          sessionId: sess,
-          targetWeb: isInitialActive ? web : null,
-          targetAp: isInitialActive ? ap : null,
-          system: isInitialActive ? sys : null,
-          hasSession: isInitialActive,
+          sessionId: null,
+          targetWeb: null,
+          targetAp: null,
+          system: null,
+          hasSession: false,
           wasError: false,
           activeConns: 0
         });
