@@ -28,12 +28,12 @@ window.SIM_CONFIG = {
       vipA: {
         name: "AP-A系代表 VIP",
         ip: "192.168.10.10:8080",
-        routingNote: "Web A系 ➜ AP A系(02,04,06)"
+        routingNote: "Web A系 ➜ AP A系(02,04)"
       },
       vipB: {
         name: "AP-B系代表 VIP",
         ip: "192.168.20.10:8080",
-        routingNote: "Web B系 ➜ AP B系(01,03,05)"
+        routingNote: "Web B系 ➜ AP B系(01,03)"
       }
     },
 
@@ -93,7 +93,7 @@ window.SIM_CONFIG = {
       }
     ],
 
-    // AP (Application) サーバ群 (Java WAR / A系: 偶数, B系: 奇数)
+    // AP (Application) サーバ群 (Java WAR / 4台構成: A系 偶数2台, B系 奇数2台)
     ap: [
       {
         id: "ap_02",
@@ -114,15 +114,6 @@ window.SIM_CONFIG = {
         defaultStaySec: 1.0
       },
       {
-        id: "ap_06",
-        name: "AP-06",
-        ip: "10.0.10.26",
-        system: "A",
-        version: "v1.0.0",
-        initialStatus: "up/active",
-        defaultStaySec: 1.0
-      },
-      {
         id: "ap_01",
         name: "AP-01",
         ip: "10.0.20.21",
@@ -135,15 +126,6 @@ window.SIM_CONFIG = {
         id: "ap_03",
         name: "AP-03",
         ip: "10.0.20.23",
-        system: "B",
-        version: "v1.0.0",
-        initialStatus: "up/active",
-        defaultStaySec: 1.0
-      },
-      {
-        id: "ap_05",
-        name: "AP-05",
-        ip: "10.0.20.25",
         system: "B",
         version: "v1.0.0",
         initialStatus: "up/active",

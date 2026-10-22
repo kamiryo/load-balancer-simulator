@@ -451,10 +451,10 @@
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; padding: 0 4px; font-family: monospace; font-size: 10.5px;">
         <div style="display: flex; gap: 10px;">
           <span id="legend-sys-a" style="background: rgba(8, 47, 73, 0.7); border: 1px solid #0369a1; padding: 1px 6px; border-radius: 4px; color: #7dd3fc;">
-            <b style="color: #38bdf8;">A系 (偶数)</b>: Web-02, 04 ➜ AP-A VIP ➜ AP-02, 04, 06
+            <b style="color: #38bdf8;">A系 (偶数)</b>: Web-02, 04 ➜ AP-A VIP ➜ AP-02, 04
           </span>
           <span id="legend-sys-b" style="background: rgba(59, 7, 100, 0.7); border: 1px solid #6b21a8; padding: 1px 6px; border-radius: 4px; color: #d8b4fe;">
-            <b style="color: #c084fc;">B系 (奇数)</b>: Web-01, 03 ➜ AP-B VIP ➜ AP-01, 03, 05
+            <b style="color: #c084fc;">B系 (奇数)</b>: Web-01, 03 ➜ AP-B VIP ➜ AP-01, 03
           </span>
           <span id="legend-sys-sorry" style="background: rgba(120, 53, 15, 0.7); border: 1px solid #b45309; padding: 1px 6px; border-radius: 4px; color: #fde68a;">
             <b style="color: #f59e0b;">SORRY</b>: Web4台down時のみ発動
@@ -567,11 +567,11 @@
                   <div id="vip-a-name" style="font-size: 10px; font-weight: bold; color: #38bdf8;">AP-A系代表 VIP</div>
                   <div id="vip-a-ip" style="font-size: 7.5px; color: #94a3b8; font-family: monospace;">192.168.10.10:8080</div>
                   <div id="vip-a-note" style="margin-top: 4px; font-size: 7.5px; background: rgba(8, 47, 73, 0.4); padding: 2px 4px; border-radius: 3px; color: #7dd3fc;">
-                    Web A系 ➜ AP A系(02,04,06)
+                    Web A系 ➜ AP A系(02,04)
                   </div>
                   <div style="margin-top: 4px; font-size: 7.5px; font-family: monospace; display: flex; justify-content: space-between;">
                     <span>AP健全台数:</span>
-                    <span id="vip-a-count" style="color: #38bdf8; font-weight: bold;">3/3台</span>
+                    <span id="vip-a-count" style="color: #38bdf8; font-weight: bold;">2/2台</span>
                   </div>
                 </div>
               </div>
@@ -587,22 +587,22 @@
                   <div id="vip-b-name" style="font-size: 10px; font-weight: bold; color: #c084fc;">AP-B系代表 VIP</div>
                   <div id="vip-b-ip" style="font-size: 7.5px; color: #94a3b8; font-family: monospace;">192.168.20.10:8080</div>
                   <div id="vip-b-note" style="margin-top: 4px; font-size: 7.5px; background: rgba(59, 7, 100, 0.4); padding: 2px 4px; border-radius: 3px; color: #d8b4fe;">
-                    Web B系 ➜ AP B系(01,03,05)
+                    Web B系 ➜ AP B系(01,03)
                   </div>
                   <div style="margin-top: 4px; font-size: 7.5px; font-family: monospace; display: flex; justify-content: space-between;">
                     <span>AP健全台数:</span>
-                    <span id="vip-b-count" style="color: #c084fc; font-weight: bold;">3/3台</span>
+                    <span id="vip-b-count" style="color: #c084fc; font-weight: bold;">2/2台</span>
                   </div>
                 </div>
               </div>
             </div>
           </div>
 
-          <!-- STAGE 5: AP Tier (6 Nodes) - Symmetric Upper A / Center / Lower B -->
+          <!-- STAGE 5: AP Tier (4 Nodes) - Symmetric Upper A / Center / Lower B -->
           <div class="stage-col">
-            <div class="stage-header">5. AP層 (Java war / 6台)</div>
+            <div class="stage-header">5. AP層 (Java war / 4台)</div>
             <div class="stage-body">
-              <!-- Upper A-System AP (02, 04, 06) -->
+              <!-- Upper A-System AP (02, 04) -->
               <div class="tier-zone-a">
                 <div class="group-box group-box-a" style="gap: 3px;">
                   <div class="group-title-a">
@@ -611,7 +611,6 @@
                   </div>
                   <div id="card-ap_02" class="node-card"></div>
                   <div id="card-ap_04" class="node-card"></div>
-                  <div id="card-ap_06" class="node-card"></div>
                 </div>
               </div>
 
@@ -620,7 +619,7 @@
                 <div style="width: 80%; height: 1px; background: linear-gradient(90deg, transparent, rgba(51, 65, 85, 0.6), transparent);"></div>
               </div>
 
-              <!-- Lower B-System AP (01, 03, 05) -->
+              <!-- Lower B-System AP (01, 03) -->
               <div class="tier-zone-b">
                 <div class="group-box group-box-b" style="gap: 3px;">
                   <div class="group-title-b">
@@ -629,7 +628,6 @@
                   </div>
                   <div id="card-ap_01" class="node-card"></div>
                   <div id="card-ap_03" class="node-card"></div>
-                  <div id="card-ap_05" class="node-card"></div>
                 </div>
               </div>
             </div>
@@ -756,10 +754,8 @@
           web_sorry: { id: 'web_sorry', name: 'SORRY', ip: '10.0.0.99', system: 'SORRY', lbStatus: 'up/standby', activeConnections: 0, cpu: 5 },
           ap_02: { id: 'ap_02', name: 'AP-02', ip: '10.0.10.22', system: 'A', lbStatus: 'up/active', version: 'v1.0.0', isDeploying: false, deployProgress: 0, activeConnections: 0, cpu: 22 },
           ap_04: { id: 'ap_04', name: 'AP-04', ip: '10.0.10.24', system: 'A', lbStatus: 'up/active', version: 'v1.0.0', isDeploying: false, deployProgress: 0, activeConnections: 0, cpu: 22 },
-          ap_06: { id: 'ap_06', name: 'AP-06', ip: '10.0.10.26', system: 'A', lbStatus: 'up/active', version: 'v1.0.0', isDeploying: false, deployProgress: 0, activeConnections: 0, cpu: 22 },
           ap_01: { id: 'ap_01', name: 'AP-01', ip: '10.0.20.21', system: 'B', lbStatus: 'up/active', version: 'v1.0.0', isDeploying: false, deployProgress: 0, activeConnections: 0, cpu: 22 },
-          ap_03: { id: 'ap_03', name: 'AP-03', ip: '10.0.20.23', system: 'B', lbStatus: 'up/active', version: 'v1.0.0', isDeploying: false, deployProgress: 0, activeConnections: 0, cpu: 22 },
-          ap_05: { id: 'ap_05', name: 'AP-05', ip: '10.0.20.25', system: 'B', lbStatus: 'up/active', version: 'v1.0.0', isDeploying: false, deployProgress: 0, activeConnections: 0, cpu: 22 }
+          ap_03: { id: 'ap_03', name: 'AP-03', ip: '10.0.20.23', system: 'B', lbStatus: 'up/active', version: 'v1.0.0', isDeploying: false, deployProgress: 0, activeConnections: 0, cpu: 22 }
         };
       }
       return nodes;
@@ -1514,7 +1510,7 @@
         const el = document.getElementById('stay-val-' + id);
         if (el) el.innerText = State.stayDuration.web + 's';
       });
-      ['ap_01', 'ap_02', 'ap_03', 'ap_04', 'ap_05', 'ap_06'].forEach(id => {
+      ['ap_01', 'ap_02', 'ap_03', 'ap_04'].forEach(id => {
         const el = document.getElementById('stay-val-' + id);
         if (el) el.innerText = State.stayDuration.ap + 's';
       });
@@ -1859,10 +1855,10 @@
             </div>
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 5px;">
               <button onclick="failAllAp()" class="btn" style="background: #4c0519; color: #fda4af; border: 1px solid #be123c; font-size: 9.5px; padding: 5px 3px;">
-                ⚡ AP 6台全滅 (503赤返却)
+                ⚡ AP 4台全滅 (503赤返却)
               </button>
               <button onclick="recoverAllAp()" class="btn" style="background: #064e3b; color: #a7f3d0; border: 1px solid #059669; font-size: 9.5px; padding: 5px 3px;">
-                ✅ AP 6台 復旧 (up/active)
+                ✅ AP 4台 復旧 (up/active)
               </button>
             </div>
           </div>
