@@ -19,8 +19,8 @@ async def run_tests():
         page.on('console', on_console)
         page.on('pageerror', lambda err: errors.append(f"Page error: {err}"))
 
-        print(">>> Navigating to http://127.0.0.1:8090/index.html...")
-        await page.goto("http://127.0.0.1:8090/index.html")
+        print(">>> Navigating to http://127.0.0.1:8095/index.html...")
+        await page.goto("http://127.0.0.1:8095/index.html")
         await page.wait_for_timeout(1000)
 
         # 1. Check title & canvas

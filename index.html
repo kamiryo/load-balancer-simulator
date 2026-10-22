@@ -2316,12 +2316,41 @@
           continue;
         }
 
-        // 各ノード（Web / AP / SORRY）にパケットが実際に到着し、滞留・処理中である期間のみ Conn をカウント
-        // （クライアント〜LB間やノード間を飛行中、あるいは次ホップ送出後はカウントしない）
-        if (p.stayNodeId && p.stayNodeId.startsWith('card-')) {
-          const targetNodeId = p.stayNodeId.replace('card-', '');
-          if (connCounts[targetNodeId] !== undefined) {
-            connCounts[targetNodeId]++;
+        // WEBサーバのConn受付状況:
+        // クライアントからのリクエストがWebに到着した瞬間からカウント開始。
+        // リバースプロキシとして後段(AP/DB)が処理中もクライアント接続を保持し、
+        // レスポンスがWebサーバを抜けてExternal LBへ返却されるまでConnを維持！
+        if (p.webNode && connCounts[p.webNode.id] !== undefined) {
+          const webCardId = 'card-' + p.webNode.id;
+          if (!p.isReturning) {
+            const webHop = p.forwardHops.indexOf(webCardId);
+            if (webHop !== -1 && p.currentHop >= webHop) {
+              connCounts[p.webNode.id]++;
+            }
+          } else {
+            const webReturnHop = p.returnHops.indexOf(webCardId);
+            if (webReturnHop !== -1 && p.currentHop <= webReturnHop) {
+              connCounts[p.webNode.id]++;
+            }
+          }
+        }
+
+        // APサーバのConn受付状況:
+        // リクエストがAPに到着した瞬間からカウント開始。
+        // DB処理中もスレッド/コネクションを占有保持し、
+        // レスポンスがAPサーバを抜けてWeb/VIPへ返却されるまでConnを維持！
+        if (p.apNode && connCounts[p.apNode.id] !== undefined) {
+          const apCardId = 'card-' + p.apNode.id;
+          if (!p.isReturning) {
+            const apHop = p.forwardHops.indexOf(apCardId);
+            if (apHop !== -1 && p.currentHop >= apHop) {
+              connCounts[p.apNode.id]++;
+            }
+          } else {
+            const apReturnHop = p.returnHops.indexOf(apCardId);
+            if (apReturnHop !== -1 && p.currentHop <= apReturnHop) {
+              connCounts[p.apNode.id]++;
+            }
           }
         }
 
