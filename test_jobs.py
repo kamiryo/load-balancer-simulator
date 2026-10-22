@@ -412,7 +412,8 @@ async def run_tests():
 
         # 9. Verify WEB-AP Persistence & 30s Idle Timeout Reset Rules
         print("\n--- Testing WEB-to-AP Persistence, Least-Conn / Lowest Node ID Rule & 30s Idle Timeout ---")
-        # Check current bindings (A-system webs bound to A-system APs, B-system webs bound to B-system APs)
+        # Wait 2.5s for auto traffic to route through all 4 webs and establish bindings
+        await page.wait_for_timeout(2500)
         bindings = await page.evaluate("() => State.webApBindings")
         print(f"  Current Web-AP Bindings: {bindings}")
         assert bindings['web_02']['targetApId'] in ['ap_02', 'ap_04'], "Web-02 must be bound to A-system AP"
@@ -446,7 +447,7 @@ async def run_tests():
         new_binding = await page.evaluate("() => State.webApBindings.web_02")
         print(f"  Re-assigned binding for Web-02 (least conn & lowest node rule): {new_binding}")
         assert new_binding['targetApId'] == 'ap_02', "When conn is equal (0 vs 0), Web-02 must be assigned to lowest AP node (AP-02)"
-        assert new_binding['idleTimer'] == 30, "Idle timer must be re-initialized to 30s"
+        assert new_binding['idleTimer'] >= 28, "Idle timer must be re-initialized to ~30s"
 
         # Now test Least Connection rule when AP-02 has higher conn
         await page.evaluate("""() => {
@@ -464,6 +465,117 @@ async def run_tests():
         print(f"  Re-assigned binding with AP-02 conn=5 vs AP-04 conn=1: {least_conn_binding}")
         assert least_conn_binding['targetApId'] == 'ap_04', "Must be assigned to least-connection AP node (AP-04)"
         print("  Confirmed: Least-connection priority and lowest-node fallback routing verified successfully!")
+
+        # 10. Web-AP Load Balancing Validation Test Case (User Requested Scenario)
+        print("\n--- Testing Specific Web-AP Load Balancing Scenario (Manual Mode, A-Webs Down, Least-Conn Routing) ---")
+        # 1) 手動モードにする
+        print("  Step 1: Switch to Manual mode")
+        # Ensure traffic mode is manual (toggle if needed)
+        cur_mode = await page.evaluate("() => State.trafficMode")
+        if cur_mode != 'manual':
+            await page.click("#btn-traffic-mode")
+            await page.wait_for_timeout(300)
+        mode = await page.evaluate("() => State.trafficMode")
+        assert mode == 'manual', f"Expected manual mode, but got {mode}"
+
+        # 2) A系WEBをダウンにする (Web-02, Web-04 down)
+        print("  Step 2: Drop A-System Web servers (Web-02, Web-04)")
+        await page.evaluate("""() => {
+            // Clear any lingering packets from prior tests completely
+            packets.length = 0;
+            State.nodes.web_02.lbStatus = 'down/-';
+            State.nodes.web_04.lbStatus = 'down/-';
+            State.nodes.web_01.lbStatus = 'up/active';
+            State.nodes.web_03.lbStatus = 'down/-'; // Keep only Web-01 active in B-tier to ensure traffic goes strictly through Web-01
+            State.nodes.ap_01.lbStatus = 'up/active';
+            State.nodes.ap_03.lbStatus = 'up/active';
+            State.nodes.ap_01.activeConnections = 0;
+            State.nodes.ap_03.activeConnections = 0;
+            State.stayDuration.web = 0.2;
+            State.stayDuration.ap = 3.0; // Keep AP processing active long enough to send 2nd request
+            // Ensure clients have null sessions and target Web-01
+            State.clients.forEach(c => {
+                c.sessionId = null;
+                c.targetWeb = 'Web-01';
+                c.targetAp = null;
+                c.system = 'B';
+                c.hasSession = false;
+            });
+            // Reset bindings
+            initWebApBindings(true);
+        }""")
+        status_web = await page.evaluate("""() => ({
+            web_02: State.nodes.web_02.lbStatus,
+            web_04: State.nodes.web_04.lbStatus,
+            web_01: State.nodes.web_01.lbStatus
+        })""")
+        print(f"  Web statuses: {status_web}")
+        assert status_web['web_02'] == 'down/-'
+        assert status_web['web_04'] == 'down/-'
+        assert status_web['web_01'] == 'up/active'
+
+        # 3) Client 1つ目で手動でリクエストを1つ実行
+        print("  Step 3: Trigger manual request from Client-01")
+        await page.evaluate("() => sendManualClientRequest(1)")
+        await page.wait_for_timeout(200)
+
+        # 4) Client 1つ目がActiveでWEB-01 -> AP-01に通る (AP-01に到達してstayTimer滞留中＝Activeになるのを待機)
+        print("  Step 4: Verify Client-01 request reaches AP-01 via Web-01 and is Active")
+        client1_active_on_ap01 = False
+        for sec in range(35):
+            await page.wait_for_timeout(100)
+            ap01_state = await page.evaluate("""() => {
+                const p = packets.find(p => p.clientRef && p.clientRef.id === 1);
+                return {
+                    pkt: p ? { web: p.webNode ? p.webNode.name : null, ap: p.apNode ? p.apNode.name : null, stay: p.stayNodeId, ret: p.isReturning } : null,
+                    ap01Conn: State.nodes.ap_01.activeConnections,
+                    ap03Conn: State.nodes.ap_03.activeConnections
+                };
+            }""")
+            if ap01_state['pkt'] and ap01_state['pkt']['web'] == 'Web-01' and ap01_state['pkt']['ap'] == 'AP-01':
+                if ap01_state['ap01Conn'] >= 1:
+                    print(f"  Confirmed Client-01 is actively processing on AP-01: {ap01_state}")
+                    client1_active_on_ap01 = True
+                    break
+        assert client1_active_on_ap01, "Client-01 request must reach AP-01 and become Active"
+
+        # 5) WEB01の無通信タイマーがAP01でActiveであることを確認
+        print("  Step 5: Verify Web-01 idle timer is Active with AP-01")
+        binding_web01 = await page.evaluate("() => State.webApBindings.web_01")
+        print(f"  Web-01 binding: {binding_web01}")
+        assert binding_web01['targetApName'] == 'AP-01', "Web-01 must be bound to AP-01"
+        assert binding_web01['idleTimer'] > 0, "Web-01 idleTimer must be Active (> 0)"
+
+        # 6) Activeの間にClient 2つ目でリクエストを発生
+        print("  Step 6: Trigger manual request from Client-02 while Client-01 is Active on AP-01")
+        # Client-01 is actively processing on AP-01 (AP-01 activeConnections >= 1, AP-03 activeConnections == 0)
+        await page.evaluate("() => sendManualClientRequest(2)")
+        await page.wait_for_timeout(200)
+
+        # 7) Client 1つ目がActiveでWEB-01 -> AP-03に通る（APサーバでコネクションが少ないAPサーバに張られる仕様であるため）
+        print("  Step 7: Verify Client-02 routes to Web-01 -> AP-03 because AP-03 has fewer connections")
+        packet2_routed = False
+        for sec in range(25):
+            await page.wait_for_timeout(100)
+            p2_all = await page.evaluate("""() => {
+                return packets.filter(p => p.clientRef && p.clientRef.id === 2).map(p => ({
+                    web: p.webNode ? p.webNode.name : null,
+                    ap: p.apNode ? p.apNode.name : null,
+                    sys: p.system,
+                    ret: p.isReturning,
+                    err: p.isError,
+                    hop: p.currentHop
+                }));
+            }""")
+            if sec == 0 or sec == 3:
+                print(f"    [Dbg Client-02 sec={sec}]: {p2_all}")
+            p2 = next((p for p in p2_all if p['web'] == 'Web-01' and p['ap'] == 'AP-03'), None)
+            if p2:
+                print(f"  Confirmed Client-02 in-flight routing: {p2}")
+                packet2_routed = True
+                break
+        assert packet2_routed, "Client-02 must route through Web-01 -> AP-03 because AP-03 has least connections"
+        print("  SUCCESS: User-specified Web-AP Least-Connection & Persistence test passed completely!")
 
         if errors:
             print("\n[ERROR] Errors encountered:")

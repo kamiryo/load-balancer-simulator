@@ -2250,7 +2250,13 @@
         }
       }
 
-      // 新規セッション (sessionId === null) の場合: 稼働中(up/active)のWebへ新規分散（もう片系へ振り分け）
+      // 新規セッション (sessionId === null) の場合: targetWeb指定があれば優先、なければ稼働中(up/active)Webへ新規分散
+      if (!chosenWeb && client.targetWeb) {
+        const prefWeb = Object.values(State.nodes).find(n => n.name === client.targetWeb || n.id === client.targetWeb || n.id === client.targetWeb.toLowerCase().replace('-', '_'));
+        if (prefWeb && prefWeb.lbStatus === 'up/active') {
+          chosenWeb = prefWeb;
+        }
+      }
       if (!chosenWeb) {
         chosenWeb = candAll[Math.floor(Math.random() * candAll.length)];
       }
@@ -2263,46 +2269,42 @@
       const vipId = chosenSys === 'A' ? 'node-vip_a' : 'node-vip_b';
       const candAps = Object.values(State.nodes).filter(n => n.id.startsWith('ap_') && n.system === chosenSys && n.lbStatus === 'up/active');
 
-      // ★ Internal LB の振り分けルール (WEBサーバ単位でAPサーバに固定)
-      // 1. WEBサーバ単位にAPサーバで固定
-      // 2. コネクションが少ない順、割り振られる前（同数）は号機が若い順APサーバに割り振り
-      // 3. WEB-AP間の負荷分散装置目線でWEBからAP宛の30秒間通信が来ないとリセット
+      // ★ Internal LB の振り分けルール (WEBサーバ単位でAPサーバに固定 & 最小コネクション優先)
+      // 1. 該当系の稼働中APの中で、アクティブコネクションが最も少ないAPサーバを選定
+      // 2. 最小コネクションのAPが複数ある場合（同数）:
+      //    - すでに固定されているAPが含まれていればその固定先を維持
+      //    - 割り振られる前など未固定時は「号機が若い順」を優先
+      // 3. 通信発生時に無通信タイマーを30秒に設定（30秒間通信が来ないと固定リセット）
       let chosenAp = null;
       const webBinding = State.webApBindings ? State.webApBindings[chosenWeb.id] : null;
 
-      if (webBinding && webBinding.targetApId && webBinding.idleTimer > 0) {
-        const fixedAp = State.nodes[webBinding.targetApId];
-        if (fixedAp && fixedAp.lbStatus === 'up/active') {
-          // 固定先APが健全: 30秒タイマーをリセット(延長)して転送
-          chosenAp = fixedAp;
-          webBinding.idleTimer = 30;
-        } else {
-          // 固定先APがダウン(down/-)または保守停止中: 固定をリセットして健全APへ再選定
-          webBinding.targetApId = null;
-          webBinding.targetApName = null;
-          webBinding.idleTimer = 0;
-        }
-      }
+      if (candAps.length > 0) {
+        const minConn = Math.min(...candAps.map(a => a.activeConnections));
+        const leastConnAps = candAps.filter(a => a.activeConnections === minConn);
 
-      // 未固定（初回、30秒無通信リセット後、または障害フェイルオーバー時）:
-      if (!chosenAp) {
-        if (candAps.length > 0) {
-          // ルール: コネクションが少ない順、同数(割り振られる前など)は号機が若い順
-          candAps.sort((a, b) => {
-            if (a.activeConnections !== b.activeConnections) {
-              return a.activeConnections - b.activeConnections;
-            }
-            return a.id.localeCompare(b.id);
-          });
-          chosenAp = candAps[0];
-          if (State.webApBindings) {
-            State.webApBindings[chosenWeb.id] = {
-              targetApId: chosenAp.id,
-              targetApName: chosenAp.name,
-              idleTimer: 30
-            };
+        // 最小コネクションのAP群の中に、現在の固定先APが含まれているか？
+        if (webBinding && webBinding.targetApId && webBinding.idleTimer > 0) {
+          const currentFixed = leastConnAps.find(a => a.id === webBinding.targetApId);
+          if (currentFixed && currentFixed.lbStatus === 'up/active') {
+            chosenAp = currentFixed;
           }
-          addLog('INFO', `🔗 [Internal LB] ${chosenWeb.name} ➜ ${chosenAp.name} 固定化 (Conn: ${chosenAp.activeConnections}, タイマー: 30s)`, '#38bdf8');
+        }
+
+        // 固定先がない、または固定先APのコネクションが他のAPより多い場合:
+        // コネクションが少ないAP群の中で「号機が若い順」に選定
+        if (!chosenAp) {
+          leastConnAps.sort((a, b) => a.id.localeCompare(b.id));
+          chosenAp = leastConnAps[0];
+          addLog('INFO', `🔗 [Internal LB] ${chosenWeb.name} ➜ ${chosenAp.name} 割り振り (最小Conn: ${chosenAp.activeConnections}, タイマー: 30s)`, '#38bdf8');
+        }
+
+        // 固定マッピング更新 ＆ 30秒タイマー設定
+        if (State.webApBindings) {
+          State.webApBindings[chosenWeb.id] = {
+            targetApId: chosenAp.id,
+            targetApName: chosenAp.name,
+            idleTimer: 30
+          };
         }
       }
 
