@@ -1468,11 +1468,12 @@
           color: '#f59e0b'
         }, true);
       } else {
+        // 自動モードへの復帰時: 通常稼働（各系2台、初期セッション構成）を初期状態へ復元
         resetAllSimulationState('auto', {
           level: 'INFO',
-          message: '🔄 【自動生成モード】に切り替えました。パケット・セッション・負荷分散状態を初期化し、自動リクエストを開始します。',
+          message: '🔄 【自動生成モード】に切り替えました。初期セッション構成（A系2台・B系2台）および負荷分散状態を初期化し、自動リクエストを開始します。',
           color: '#38bdf8'
-        }, true);
+        }, false);
       }
     };
 
@@ -2251,9 +2252,14 @@
       }
 
       // 新規接続 (sessionId === null)、または未固定の場合:
-      // ★ External LB ルール: 最小コネクションのWEBサーバに振り分け、同数(無風状態など)であれば号機が若い順 (Web-01 < Web-02 < Web-03 < Web-04)
+      // ★ External LB ルール: クライアント担当系(偶数: A系 / 奇数: B系)のWeb群の中から最小コネクション(同数は号機若い順)に選定
+      // ※担当系が全滅時はもう片系(candAll)へ自動フェイルオーバー
       if (!chosenWeb) {
-        candAll.sort((a, b) => {
+        const clientSys = (client.id % 2 === 0) ? 'A' : 'B';
+        const candSysWeb = (clientSys === 'A') ? candWebA : candWebB;
+        const targetCand = (candSysWeb.length > 0) ? candSysWeb : candAll;
+
+        targetCand.sort((a, b) => {
           if (a.activeConnections !== b.activeConnections) {
             return a.activeConnections - b.activeConnections;
           }
@@ -2261,7 +2267,7 @@
           const numB = parseInt(b.id.replace(/\D/g, ''), 10) || 0;
           return numA - numB;
         });
-        chosenWeb = candAll[0];
+        chosenWeb = targetCand[0];
       }
 
       const chosenSys = chosenWeb.system;
