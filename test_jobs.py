@@ -634,16 +634,17 @@ async def run_tests():
                     return name
             return None
 
-        # 11-1. When B-webs conn equal (0 vs 0), Client-01 (B-sys) must route to lowest node ID (Web-01)
+        # 11-1. When all 4 webs equal conn (0 vs 0 vs 0 vs 0), 1st request routes to Web-01
         await page.evaluate("""() => {
             packets.length = 0;
+            extLbRoundRobinIndex = 0;
             sendManualClientRequest(1);
         }""")
         p_calm1 = await get_latest_routed_web()
-        print(f"  Client-01 (B-sys) Web-01/03 conn=0 -> Assigned to: {p_calm1}")
-        assert p_calm1 == 'Web-01', "From calm state (equal conn=0), Client-01 must route to lowest B-node Web-01"
+        print(f"  All webs conn=0 (1st req) -> Assigned to: {p_calm1}")
+        assert p_calm1 == 'Web-01', "From calm state (equal conn=0), 1st request must route to Web-01"
 
-        # 11-2. When Web-01 conn=1 vs Web-03 conn=0, Client-01 must route to least-conn Web-03
+        # 11-2. When Web-01 conn=1 vs Web-02..04 conn=0, request must route to least-conn Web (Web-02/03/04)
         await page.evaluate("""() => {
             packets.length = 0;
             packets.push({
@@ -652,36 +653,25 @@ async def run_tests():
                 isReturning: false, currentHop: 2, stayTimer: 5000, stayNodeId: 'card-web_01',
                 webNode: State.nodes.web_01, apNode: State.nodes.ap_01, system: 'B', speed: 0.035, progress: 0, burstParticles: []
             });
-            sendManualClientRequest(1);
+            sendManualClientRequest(2);
         }""")
         p_calm2 = await get_latest_routed_web()
-        print(f"  Client-01 (B-sys) Web-01 conn=1 vs Web-03 conn=0 -> Assigned to: {p_calm2}")
-        assert p_calm2 == 'Web-03', "When Web-01 is busy, Client-01 must route to least-conn B-node Web-03"
+        print(f"  Web-01 busy (conn=1) -> Assigned to least-conn: {p_calm2}")
+        assert p_calm2 in ['Web-02', 'Web-03', 'Web-04'], f"When Web-01 is busy, must route to least-conn web, got {p_calm2}"
 
-        # 11-3. When A-webs conn equal (0 vs 0), Client-02 (A-sys) must route to lowest node ID (Web-02)
+        # 11-3. Sequential manual requests in calm state round-robin across all 4 webs
         await page.evaluate("""() => {
             packets.length = 0;
-            sendManualClientRequest(2);
+            extLbRoundRobinIndex = 0;
         }""")
-        p_calm3 = await get_latest_routed_web()
-        print(f"  Client-02 (A-sys) Web-02/04 conn=0 -> Assigned to: {p_calm3}")
-        assert p_calm3 == 'Web-02', "From calm state (equal conn=0), Client-02 must route to lowest A-node Web-02"
-
-        # 11-4. When Web-02 conn=1 vs Web-04 conn=0, Client-02 must route to least-conn Web-04
-        await page.evaluate("""() => {
-            packets.length = 0;
-            packets.push({
-                forwardHops: ['card-client-2', 'node-ext_lb', 'card-web_02', 'node-vip_a', 'card-ap_02', 'node-db'],
-                returnHops: ['node-db', 'card-ap_02', 'node-vip_a', 'card-web_02', 'node-ext_lb', 'card-client-2'],
-                isReturning: false, currentHop: 2, stayTimer: 5000, stayNodeId: 'card-web_02',
-                webNode: State.nodes.web_02, apNode: State.nodes.ap_02, system: 'A', speed: 0.035, progress: 0, burstParticles: []
-            });
-            sendManualClientRequest(2);
-        }""")
-        p_calm4 = await get_latest_routed_web()
-        print(f"  Client-02 (A-sys) Web-02 conn=1 vs Web-04 conn=0 -> Assigned to: {p_calm4}")
-        assert p_calm4 == 'Web-04', "When Web-02 is busy, Client-02 must route to least-conn A-node Web-04"
-        print("  SUCCESS: Client-to-Web System Isolation and Least-Connection routing verified completely!")
+        routed_seq = []
+        for cid in [1, 2, 3, 4]:
+            await page.evaluate(f"() => {{ packets.length = 0; sendManualClientRequest({cid}); }}")
+            w = await get_latest_routed_web()
+            routed_seq.append(w)
+        print(f"  Sequential requests from clients 1..4 in calm state: {routed_seq}")
+        assert routed_seq == ['Web-01', 'Web-02', 'Web-03', 'Web-04'], f"Expected ['Web-01', 'Web-02', 'Web-03', 'Web-04'], but got {routed_seq}"
+        print("  SUCCESS: Client-to-Web 4-node load balancing & least-connection round-robin verified completely!")
 
         # 12. Verify Auto -> Manual -> Auto System Balance (Must stay strictly 2 for System A, 2 for System B)
         print("\n--- Testing Auto -> Manual -> Auto Mode Toggle Balance (Must be 2 in System A, 2 in System B) ---")

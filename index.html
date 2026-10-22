@@ -1327,6 +1327,8 @@
       // 4. メトリクス・統計値のリセット
       State.stats = { totalRequests: 0, successCount: 0, errorCount: 0, sorryCount: 0, systemACount: 0, systemBCount: 0 };
       State.isRunning = true;
+      extLbRoundRobinIndex = 0;
+      clientSpawnIndex = 0;
       const btnRun = document.getElementById('btn-run');
       if (btnRun) {
         btnRun.innerText = '一時停止';
@@ -2126,6 +2128,7 @@
     }
 
     let clientSpawnIndex = 0;
+    let extLbRoundRobinIndex = 0;
     function spawnPacket() {
       if (!State.isRunning || State.trafficMode === 'manual' || State.clientReqRate === 0) return;
 
@@ -2246,23 +2249,24 @@
 
       // 新規接続 (sessionId === null)、または未固定の場合:
       // ★ External LB ルール: 
-      // クライアント担当系 (奇数: B系 [Web-01, Web-03] / 偶数: A系 [Web-02, Web-04]) のWeb群の中から選定
-      // ※担当系Web全滅時はもう片系(candAll)へ自動フェイルオーバー
-      // 選定基準: 最小コネクション優先、同数(無風状態など)であれば号機が若い順！
+      // クライアントごとのA系/B系縛りはなく、WEB 4台 (Web-01, Web-02, Web-03, Web-04) でロードバランシング！
+      // 1. 稼働中のWEBサーバの中でアクティブコネクションが最小のサーバ群を選定
+      // 2. 最小コネクションのサーバが複数ある場合(無風状態で同数0など):
+      //    ラウンドロビン(順繰り: Web-01 ➜ Web-02 ➜ Web-03 ➜ Web-04 ➜ Web-01...)で公平に分散！
       if (!chosenWeb) {
-        const clientSys = (client && client.id % 2 === 0) ? 'A' : 'B';
-        const candSysWeb = (clientSys === 'A') ? candWebA : candWebB;
-        const targetCand = (candSysWeb.length > 0) ? candSysWeb : candAll;
+        const minConn = Math.min(...candAll.map(w => w.activeConnections));
+        const leastConnWebs = candAll.filter(w => w.activeConnections === minConn);
 
-        targetCand.sort((a, b) => {
-          if (a.activeConnections !== b.activeConnections) {
-            return a.activeConnections - b.activeConnections;
-          }
+        // 号機順にソート (Web-01, Web-02, Web-03, Web-04)
+        leastConnWebs.sort((a, b) => {
           const numA = parseInt(a.id.replace(/\D/g, ''), 10) || 0;
           const numB = parseInt(b.id.replace(/\D/g, ''), 10) || 0;
           return numA - numB;
         });
-        chosenWeb = targetCand[0];
+
+        // 最小コネクション群の中でラウンドロビンで選定
+        chosenWeb = leastConnWebs[extLbRoundRobinIndex % leastConnWebs.length];
+        extLbRoundRobinIndex++;
       }
 
       p.webNode = chosenWeb;
