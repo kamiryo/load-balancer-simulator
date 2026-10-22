@@ -316,6 +316,23 @@ async def run_tests():
         is_manual = await page.evaluate("() => State.trafficMode === 'manual'")
         assert is_manual, "State.trafficMode must be 'manual'"
 
+        # Verify that Req Rate slider and Pause button are hidden in manual mode
+        visibility_in_manual = await page.evaluate("""() => {
+            const btnRun = document.getElementById('btn-run');
+            const reqGroup = document.getElementById('req-rate-control-group');
+            const manualGuide = document.getElementById('manual-mode-guide-box');
+            return {
+                btnRunHidden: btnRun ? btnRun.style.display === 'none' : false,
+                reqGroupHidden: reqGroup ? reqGroup.style.display === 'none' : false,
+                manualGuideVisible: manualGuide ? manualGuide.style.display === 'flex' : false
+            };
+        }""")
+        print(f"  Visibility in manual mode: {visibility_in_manual}")
+        assert visibility_in_manual['btnRunHidden'], "Pause button (btn-run) must be HIDDEN in manual mode"
+        assert visibility_in_manual['reqGroupHidden'], "Req rate slider must be HIDDEN in manual mode"
+        assert visibility_in_manual['manualGuideVisible'], "Manual mode guide must be VISIBLE in manual mode"
+        print("  Confirmed: Pause button and Req Rate slider are cleanly hidden in manual mode!")
+
         # Verify complete initialization on mode switch (requests, sessions, LB states, metrics)
         init_check = await page.evaluate("""() => {
             return {
@@ -372,6 +389,22 @@ async def run_tests():
         assert auto_count > 0, "Traffic auto-generation must resume in auto mode"
         auto_has_req_after = await page.evaluate("() => document.getElementById('clients-list-container').innerHTML.includes('⚡Req')")
         assert not auto_has_req_after, "Req badge must disappear when switched back to Auto mode"
+
+        # Verify that Pause button and Req Rate slider are restored in Auto mode
+        visibility_in_auto = await page.evaluate("""() => {
+            const btnRun = document.getElementById('btn-run');
+            const reqGroup = document.getElementById('req-rate-control-group');
+            const manualGuide = document.getElementById('manual-mode-guide-box');
+            return {
+                btnRunVisible: btnRun ? btnRun.style.display !== 'none' : false,
+                reqGroupVisible: reqGroup ? reqGroup.style.display !== 'none' : false,
+                manualGuideHidden: manualGuide ? manualGuide.style.display === 'none' : false
+            };
+        }""")
+        print(f"  Visibility restored in auto mode: {visibility_in_auto}")
+        assert visibility_in_auto['btnRunVisible'], "Pause button must be restored in Auto mode"
+        assert visibility_in_auto['reqGroupVisible'], "Req rate slider must be restored in Auto mode"
+        assert visibility_in_auto['manualGuideHidden'], "Manual guide must be hidden in Auto mode"
 
         if errors:
             print("\n[ERROR] Errors encountered:")
